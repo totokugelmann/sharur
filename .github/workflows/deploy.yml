@@ -1,0 +1,41 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # Este job requiere que el repositorio configure los secretos
+    # REGISTRY_USERNAME / REGISTRY_PASSWORD y REGISTRY_URL antes de
+    # habilitarse en un entorno real de la SAIC.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/sharur-saic:${{ github.ref_name }}
+            ${{ secrets.REGISTRY_URL }}/sharur-saic:latest
+
+      # El despliegue efectivo (staging/produccion de la SAIC) queda
+      # a definir segun la infraestructura destino: no se asume aca
+      # ningun proveedor cloud ni orquestador especifico.

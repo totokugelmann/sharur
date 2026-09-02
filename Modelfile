@@ -1,0 +1,13 @@
+# Sharur SAIC - Modelfile
+#
+# Define el modelo custom "sharur-qwen" usado por app/services/llm_service.py
+# (ver OLLAMA_MODEL en app/core/config.py).
+#
+# Uso: ollama create sharur-qwen -f Modelfile
+# (ver seccion "Setup de desarrollo" del README.md para el paso a paso completo)
+
+FROM huihui_ai/qwen3.5-abliterated:9b
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.7
+PARAMETER top_k 10
+PARAMETER top_p 0.9

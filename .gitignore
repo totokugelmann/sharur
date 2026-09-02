@@ -1,0 +1,41 @@
+# Sharur SAIC - .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Entorno / secretos
+.env
+.env.*
+!.env.example
+
+# Datos y evidencia (NUNCA versionar evidencia real ni reportes forenses)
+evidence_storage/
+reports/
+logs/
+*.db
+*.sqlite3
+
+# Alembic (se versiona alembic/versions, no artefactos locales)
+alembic/versions/__pycache__/
+
+# Docker
+docker/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

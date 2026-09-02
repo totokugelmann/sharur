@@ -1,0 +1,83 @@
+# Sharur SAIC - docker/docker-compose.yml
+#
+# Orquestacion de desarrollo/staging: API, Postgres, Redis,
+# worker Celery y beat para tareas periodicas.
+#
+# NOTA DE SEGURIDAD: el servicio "api" requiere NET_ADMIN para que
+# network_control.py pueda administrar las cadenas iptables por
+# caso. En produccion, evaluar separar esa capacidad en un sidecar
+# dedicado en vez de otorgarsela al proceso principal de la API.
+
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - evidence_storage:/srv/sharur/evidence_storage
+      - reports:/srv/sharur/reports
+      - logs:/srv/sharur/logs
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    env_file:
+      - ../.env
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - evidence_storage:/srv/sharur/evidence_storage
+      - reports:/srv/sharur/reports
+      - logs:/srv/sharur/logs
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    env_file:
+      - ../.env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sharur
+      POSTGRES_PASSWORD: sharur
+      POSTGRES_DB: sharur_saic
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  evidence_storage:
+  reports:
+  logs:

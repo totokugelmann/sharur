@@ -16,6 +16,11 @@ class DispositivoCreate(BaseModel):
     orden_id: int
     tipo: TipoDispositivo
     identificador: str = Field(..., max_length=512)
+    rango_red_autorizado: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Rango de red (CIDR) autorizado para localizar el dispositivo cuando su IP es dinámica.",
+    )
     descripcion: Optional[str] = None
     sub_alcance_datos: str = Field(..., min_length=5)
 
@@ -30,6 +35,7 @@ class DispositivoHallazgoCasualCreate(BaseModel):
     orden_id: int
     tipo: TipoDispositivo
     identificador: str = Field(..., max_length=512)
+    rango_red_autorizado: Optional[str] = Field(None, max_length=128)
     descripcion: Optional[str] = None
     sub_alcance_datos: str = Field(..., min_length=5)
     dispositivo_origen_id: int
@@ -43,6 +49,7 @@ class DispositivoRead(BaseModel):
     orden_id: int
     tipo: TipoDispositivo
     identificador: str
+    rango_red_autorizado: Optional[str]
     descripcion: Optional[str]
     sub_alcance_datos: str
     estado: EstadoDispositivo

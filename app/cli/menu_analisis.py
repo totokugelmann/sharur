@@ -39,6 +39,40 @@ _HERRAMIENTAS = [
 ]
 
 
+def _elegir_objetivo(dispositivo: Dispositivo) -> str:
+    """
+    Pregunta el objetivo a usar para el escaneo. Por defecto sugiere
+    el identificador del dispositivo, pero si hay un rango de red
+    autorizado cargado (IP dinamica, se necesita localizar el
+    dispositivo), lo ofrece como alternativa -- y de todos modos deja
+    escribir cualquier otro valor dentro de lo que la orden autoriza.
+
+    La verificacion de que el equipo hallado en el objetivo elegido es
+    efectivamente el dispositivo autorizado es responsabilidad manual
+    del operador (revisando MAC/hostname/fingerprint en la evidencia
+    despues), el sistema no lo automatiza.
+    """
+    if dispositivo.rango_red_autorizado:
+        ui.info(
+            f"  Identificador registrado: {dispositivo.identificador} | "
+            f"Rango de red autorizado: {dispositivo.rango_red_autorizado}"
+        )
+        ui.info("  Usá el identificador si conocés la IP exacta, o el rango para localizar el dispositivo.")
+        return ui.prompt("  Objetivo del escaneo", default=dispositivo.rango_red_autorizado)
+
+    return ui.prompt("  Objetivo del escaneo", default=dispositivo.identificador)
+
+
+def _elegir_perfil_nmap() -> str:
+    opciones = [
+        ("default", "default — balance estándar (-sV -sC --top-ports 1000)"),
+        ("rapido", "rápido — top puertos más comunes, veloz (-sV -F)"),
+        ("completo", "completo — los 65535 puertos, más lento (-sV -sC -p-)"),
+        ("sigiloso", "sigiloso — SYN scan lento, menos detectable (-sS -T2, requiere privilegios)"),
+    ]
+    return ui.menu("Perfil de escaneo (nmap)", opciones)
+
+
 def _mostrar_resultado_tool(resultado: ToolResult) -> None:
     ui.subtitulo(f"Resultado: {resultado.tool} (status={resultado.status})")
     if resultado.status == "rechazado_gating":
@@ -54,23 +88,30 @@ def _mostrar_resultado_tool(resultado: ToolResult) -> None:
     ui.info(f"Duración: {resultado.duration_seconds:.2f}s | hash evidencia: {resultado.evidence_hash[:16]}...")
 
 
-def _ejecutar_herramienta(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, fn) -> None:
-    resultado = fn(db, caso_id, dispositivo.id, username, dispositivo.identificador)
+def _ejecutar_herramienta(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, codigo: str, fn) -> None:
+    target = _elegir_objetivo(dispositivo)
+
+    if codigo == "nmap":
+        perfil = _elegir_perfil_nmap()
+        resultado = fn(db, caso_id, dispositivo.id, username, target, profile=perfil)
+    else:
+        resultado = fn(db, caso_id, dispositivo.id, username, target)
+
     db.commit()
     _mostrar_resultado_tool(resultado)
 
     if resultado.status == "ok" and ui.prompt_si_no(
         "¿Enviar esta evidencia al modelo de IA para sugerir CVEs aplicables?", default=True
     ):
-        _analisis_ia_sobre_resultado(db, caso_id, dispositivo, username, resultado.tool)
+        _analisis_ia_sobre_resultado(db, caso_id, dispositivo, username, codigo, resultado)
 
 
-def _analisis_ia_sobre_resultado(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, herramienta: str) -> None:
+def _analisis_ia_sobre_resultado(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, herramienta: str, resultado_tool) -> None:
     ui.info("Consultando al modelo local (Ollama) y verificando contra NVD, puede tardar unos segundos...")
     try:
-        hallazgos = analisis_ia_service.ejecutar_analisis_ia(
+        hallazgos = analisis_ia_service.analizar_evidencia(
             db, caso_id=caso_id, dispositivo_id=dispositivo.id, username=username,
-            herramienta=herramienta, target=dispositivo.identificador,
+            herramienta=herramienta, resultado_tool=resultado_tool,
         )
         db.commit()
     except ValueError as exc:
@@ -204,6 +245,6 @@ def menu_intervencion(db: Session, caso_id: int, orden: Orden, dispositivo: Disp
         # Es una herramienta de la lista numerada
         for codigo, _, fn in _HERRAMIENTAS:
             if codigo == eleccion:
-                _ejecutar_herramienta(db, caso_id, dispositivo, username, fn)
+                _ejecutar_herramienta(db, caso_id, dispositivo, username, codigo, fn)
                 ui.pausar()
                 break

@@ -182,9 +182,19 @@ def agregar_dispositivo(db: Session, orden: Orden, actor_username: str) -> Dispo
     tipo_codigo = ui.prompt("  Tipo", default="1")
     tipo = _TIPOS_DISPOSITIVO.get(tipo_codigo, TipoDispositivo.HOST_RED)
 
+    ui.info("  El identificador es el dato DESCRIPTIVO del dispositivo (modelo, IMEI, dominio, o")
+    ui.info("  IP si es fija). La correlación final entre lo hallado en un escaneo y este")
+    ui.info("  dispositivo específico queda a cargo tuyo, revisando los logs después.")
+    identificador = ui.prompt("  Identificador (ej: 'Samsung S24 - IMEI 123...', IP fija, dominio)")
+
+    ui.info("  Si la IP de este dispositivo es dinámica y no la conocés de antemano, podés cargar")
+    ui.info("  un rango de red (CIDR) autorizado para localizarlo escaneando (ej: 192.168.1.0/24).")
+    rango_red = ui.prompt("  Rango de red autorizado (opcional, dejar vacío si no aplica)", requerido=False) or None
+
     datos = {
         "tipo": tipo,
-        "identificador": ui.prompt("  Identificador (IP / dominio / IMEI, etc.)"),
+        "identificador": identificador,
+        "rango_red_autorizado": rango_red,
         "descripcion": ui.prompt("  Descripción", requerido=False) or None,
         "sub_alcance_datos": ui.prompt("  Sub-alcance de datos autorizado sobre este dispositivo"),
     }
@@ -210,7 +220,8 @@ def elegir_dispositivo(db: Session, orden: Orden, username: str) -> Optional[Dis
 
     opciones = []
     for d in dispositivos:
-        etiqueta = f"[{d.id}] {d.identificador} ({d.tipo.value}) — {d.estado.value}"
+        extra = f" | rango: {d.rango_red_autorizado}" if d.rango_red_autorizado else ""
+        etiqueta = f"[{d.id}] {d.identificador} ({d.tipo.value}) — {d.estado.value}{extra}"
         opciones.append((f"disp:{d.id}", etiqueta))
     opciones.append(("nuevo", "Agregar un nuevo dispositivo a esta orden"))
 

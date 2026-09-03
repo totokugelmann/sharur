@@ -45,31 +45,23 @@ def _normalizar_severidad(valor: Optional[str]) -> SeveridadHallazgo:
     return _MAPA_SEVERIDAD.get(valor.strip().lower(), SeveridadHallazgo.INFORMATIVA)
 
 
-def ejecutar_analisis_ia(
+def analizar_evidencia(
     db: Session,
     caso_id: int,
     dispositivo_id: int,
     username: str,
     herramienta: str,
-    target: str,
+    resultado_tool,
 ) -> list[Hallazgo]:
     """
-    Corre una herramienta gateada, pasa su salida al LLM, valida
-    cada hallazgo propuesto contra la evidencia cruda y contra
-    NVD, y persiste todos los resultados (confirmados, probables
-    y descartados).
+    Corre el pipeline evidence-first (LLM -> validacion de cita ->
+    verificacion NVD -> persistencia) sobre un ToolResult YA
+    OBTENIDO. Separado de `ejecutar_analisis_ia` para que un
+    llamador que ya corrio la herramienta (por ejemplo el CLI, que
+    deja al operador elegir objetivo/perfil de escaneo de forma
+    interactiva) no tenga que volver a ejecutarla desde cero solo
+    para analizarla.
     """
-    if herramienta == "nmap":
-        resultado_tool = tools_service.run_nmap(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "httpx":
-        resultado_tool = tools_service.run_httpx(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "testssl":
-        resultado_tool = tools_service.run_testssl(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "nuclei":
-        resultado_tool = tools_service.run_nuclei_deteccion(db, caso_id, dispositivo_id, username, target)
-    else:
-        raise ValueError(f"Herramienta '{herramienta}' no soportada por el pipeline de analisis IA.")
-
     if resultado_tool.status not in ("ok", "error"):
         # rechazado_gating, timeout, not_found: no tiene sentido mandarlo al LLM
         return []
@@ -163,3 +155,36 @@ def ejecutar_analisis_ia(
         )
 
     return hallazgos_persistidos
+
+
+def ejecutar_analisis_ia(
+    db: Session,
+    caso_id: int,
+    dispositivo_id: int,
+    username: str,
+    herramienta: str,
+    target: str,
+) -> list[Hallazgo]:
+    """
+    Corre una herramienta gateada, pasa su salida al LLM, valida
+    cada hallazgo propuesto contra la evidencia cruda y contra
+    NVD, y persiste todos los resultados (confirmados, probables
+    y descartados).
+
+    Usado por la API HTTP, donde no existe un ToolResult previo.
+    Si ya tenes uno (por ejemplo el CLI, tras dejar elegir objetivo/
+    perfil al operador), usa `analizar_evidencia` directamente para
+    no correr la herramienta dos veces.
+    """
+    if herramienta == "nmap":
+        resultado_tool = tools_service.run_nmap(db, caso_id, dispositivo_id, username, target)
+    elif herramienta == "httpx":
+        resultado_tool = tools_service.run_httpx(db, caso_id, dispositivo_id, username, target)
+    elif herramienta == "testssl":
+        resultado_tool = tools_service.run_testssl(db, caso_id, dispositivo_id, username, target)
+    elif herramienta == "nuclei":
+        resultado_tool = tools_service.run_nuclei_deteccion(db, caso_id, dispositivo_id, username, target)
+    else:
+        raise ValueError(f"Herramienta '{herramienta}' no soportada por el pipeline de analisis IA.")
+
+    return analizar_evidencia(db, caso_id, dispositivo_id, username, herramienta, resultado_tool)

@@ -43,9 +43,26 @@ class Dispositivo(Base):
 
     tipo: Mapped[TipoDispositivo] = mapped_column(Enum(TipoDispositivo))
 
-    # Identificador tecnico del target: IP, dominio, IMEI, etc.
+    # Identificador tecnico del target: IP, dominio, IMEI, modelo del
+    # dispositivo, etc. Es el dato DESCRIPTIVO/de referencia -- no
+    # necesariamente la IP exacta a usar en cada escaneo, porque en la
+    # gran mayoria de los casos (celulares, notebooks) la IP es
+    # dinamica y se desconoce de antemano.
     identificador: Mapped[str] = mapped_column(String(512), index=True)
     identificador_normalizado: Mapped[str] = mapped_column(String(512), index=True)
+
+    # Rango de red autorizado para LOCALIZAR este dispositivo cuando
+    # su IP exacta se desconoce de antemano (ej: "192.168.1.0/24").
+    # Es lo que la orden habilita a escanear para encontrar el
+    # dispositivo, no una promesa de que el sistema pueda verificar
+    # automaticamente que el equipo hallado en ese rango es
+    # efectivamente el autorizado (eso depende de MAC/hostname/
+    # fingerprint, que se pueden falsear) -- esa correlacion final
+    # queda a cargo del operador, revisando manualmente la evidencia
+    # y los logs de auditoria despues del escaneo. Opcional: si el
+    # dispositivo tiene una IP fija conocida, puede omitirse y usar
+    # directamente `identificador` como objetivo.
+    rango_red_autorizado: Mapped[str] = mapped_column(String(128), nullable=True)
 
     descripcion: Mapped[str] = mapped_column(Text, nullable=True)
 

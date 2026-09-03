@@ -114,6 +114,14 @@ def agregar_dispositivo(db: Session, orden: Orden, datos: dict, actor_username: 
     # Amplia el perimetro de red del caso si el identificador es IP/CIDR
     network_control.permitir_destino(orden.caso_id, identificador)
 
+    # Si ademas se cargo un rango de red autorizado (dispositivo con
+    # IP dinamica, se escanea el rango para localizarlo), se habilita
+    # tambien ese rango en el perimetro -- sin esto, el allow-list
+    # bloquearia cualquier escaneo fuera de la IP puntual.
+    rango = datos.get("rango_red_autorizado")
+    if rango:
+        network_control.permitir_destino(orden.caso_id, rango)
+
     return dispositivo
 
 
@@ -179,6 +187,8 @@ def aprobar_hallazgo_casual(db: Session, dispositivo: Dispositivo, aprobado_por:
     )
 
     network_control.permitir_destino(dispositivo.orden.caso_id, dispositivo.identificador)
+    if dispositivo.rango_red_autorizado:
+        network_control.permitir_destino(dispositivo.orden.caso_id, dispositivo.rango_red_autorizado)
 
     return dispositivo
 
@@ -198,5 +208,7 @@ def excluir_dispositivo(db: Session, dispositivo: Dispositivo, motivo: str, acto
     )
 
     network_control.revocar_destino(dispositivo.orden.caso_id, dispositivo.identificador)
+    if dispositivo.rango_red_autorizado:
+        network_control.revocar_destino(dispositivo.orden.caso_id, dispositivo.rango_red_autorizado)
 
     return dispositivo

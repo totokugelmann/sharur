@@ -81,6 +81,8 @@ def ejecutar_cese(
     )
 
     network_control.revocar_destino(dispositivo.orden.caso_id, dispositivo.identificador)
+    if dispositivo.rango_red_autorizado:
+        network_control.revocar_destino(dispositivo.orden.caso_id, dispositivo.rango_red_autorizado)
 
     return dispositivo
 

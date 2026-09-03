@@ -1,180 +1,99 @@
 # Sharur SAIC
 
-Framework de evidencia digital para la SAIC (Secretaría/Área de Investigaciones Criminales):
-permite, bajo orden judicial y dentro de un alcance técnicamente delimitado, realizar
-**reconocimiento y análisis de dispositivos ya identificados**, con **cadena de custodia
-verificable de principio a fin**.
+Sharur es un sistema para gestionar intervenciones técnicas sobre dispositivos digitales
+dentro de una causa judicial: se carga el caso, se registra la orden que la autoriza junto con
+los dispositivos y el alcance permitido, y a partir de ahí cada acción que se ejecuta (un
+escaneo, un comando de consola, un cese) queda validada contra ese alcance y registrada en una
+auditoría que no se puede alterar sin que quede evidencia de la alteración.
 
-Reescritura sobre la base del framework original *Sharur* (reconocimiento de red/API y análisis
-estático de APK, evidence-first con LLM), reestructurado como servicio FastAPI orientado a
-gestión de casos judiciales conforme al Código Procesal Penal de Misiones (Ley XIV N° 13).
+Nace como una reescritura del framework original *Sharur* (reconocimiento de red y análisis de
+APKs, con un modelo de IA local que solo puede señalar hallazgos que cite textualmente de la
+evidencia real, nunca inventarlos), reorganizado como un servicio con base de datos propia,
+API HTTP y un CLI interactivo.
 
----
+## Qué hace y qué no hace
 
-## ⚠️ Alcance y límite deliberado del sistema
+La idea central del sistema es simple: controla **cuándo, sobre qué y por cuánto tiempo** se
+puede actuar. Eso es lo que lo hace confiable como registro — cada acción se valida contra un
+alcance autorizado explícito, y cada evento de auditoría incluye el hash del evento anterior,
+así que alterar un registro pasado rompe visiblemente la cadena de todos los que vinieron
+después.
 
-Este sistema **gobierna cuándo, sobre qué y por cuánto tiempo se puede actuar**. Esa es la
-propiedad que lo hace defendible como prueba: cada acción queda validada contra un alcance
-autorizado explícito y auditada con hash encadenado, de forma tal que cualquier alteración
-posterior del registro es matemáticamente detectable.
+Lo que el sistema deliberadamente no incluye:
 
-Lo que este sistema **no** implementa, por diseño:
+- No tiene ningún mecanismo de acceso remoto, intrusión ni explotación de vulnerabilidades. La
+  consola manual solo puede correr herramientas de reconocimiento (nmap, whois, dig, httpx,
+  curl, testssl, nuclei con plantillas de detección, graphw00f), todas listadas explícitamente
+  en la configuración. No hay forma de invocar nada fuera de esa lista.
+- No implementa ningún agente ni implante remoto. El módulo de cese registra el evento de cese
+  — quién, cuándo, con qué comprobante — como parte de la auditoría, pero no contiene ningún
+  mecanismo técnico de instalación o desinstalación. Si algo así existiera como pieza externa al
+  sistema, lo único que haría este módulo es auditar el comprobante que le entreguen, sin
+  necesitar saber cómo se logró.
+- El enlace con proveedores de Internet (`isp_service.py`) es un placeholder a propósito:
+  todavía no está definido el canal formal para esas solicitudes, así que el módulo existe como
+  punto de extensión pero no hace nada por ahora.
 
-- **Ningún mecanismo de acceso remoto, intrusión o explotación de vulnerabilidades.** La
-  consola manual (`consola_service.py`) solo ejecuta herramientas de reconocimiento pasivo/
-  semi-activo (`nmap`, `whois`, `dig`, `httpx`, `curl`, `testssl.sh`, `nuclei` con plantillas
-  de detección, `graphw00f`), listadas explícitamente en `CONSOLE_ALLOWED_BINARIES`. Esa lista
-  no incluye frameworks de explotación ni herramientas de post-explotación.
-- **Ningún agente/implante remoto.** El módulo de cese (`cese_service.py`) registra el
-  **evento** de cese (quién, cuándo, con qué hash de verificación) como parte de la cadena de
-  auditoría, pero no contiene ni invoca ningún mecanismo técnico de instalación/desinstalación
-  remota. Si tal mecanismo existiera como pieza externa al sistema, se integraría únicamente
-  aportando un comprobante que este módulo audita — el sistema nunca necesita conocer sus
-  detalles técnicos.
-- **`isp_service.py` es un placeholder** intencional: el enlace formal con proveedores de
-  Internet queda pendiente de definición, tal como se especificó en el diseño original.
+Todo lo demás —gestión de casos, carga de orden y alcance, el motor que valida cada acción,
+auditoría con cadena de hashes, el análisis con IA verificado contra vulnerabilidades reales,
+cese, notificación, cierre de caso con hash final— está implementado y funcionando.
 
-Todo lo demás — gestión de casos, carga de orden y alcance, motor de gating, auditoría con
-cadena de hashes, pipeline de análisis con IA verificado contra NVD, cese como evento
-auditable, notificación al imputado/defensor, cierre con hash de integridad — está
-completamente implementado.
+## Cómo está organizado
 
----
-
-## Base legal
-
-Código Procesal Penal de Misiones (Ley XIV N° 13), Título III, Capítulo IX (Arts. 284-287):
-
-- **Art. 284** — orden general de obtención de evidencia digital, deber de colaboración de proveedores.
-- **Art. 285** — adquisición remota mediante herramientas forenses, ejecutada por la SAIC; exige,
-  bajo pena de nulidad: detalle de personal, duración, alcance y prórroga; cese y eliminación de
-  la herramienta al cumplir el objetivo; notificación al imputado/defensor; fundamento de
-  proporcionalidad, necesidad e idoneidad.
-- **Art. 286** — hallazgo casual: todo nuevo objetivo, aunque sea del mismo imputado, requiere
-  inclusión expresa en la orden antes de poder actuar sobre él.
-- **Art. 287** — perfil digital encubierto (fuera del alcance de este sistema).
-
-Marco general complementario: Const. Nac. Art. 18, Código Penal Art. 153 bis, Ley 25.520,
-Ley 26.388/27.411 (Convenio de Budapest).
-
----
-
-## Arquitectura
-
-```
 sharur-saic/
 ├── app/
-│   ├── main.py                      # Entry point FastAPI
-│   ├── core/
-│   │   ├── config.py                 # Configuración centralizada (pydantic-settings)
-│   │   ├── security.py               # JWT, hashing, control de roles
-│   │   ├── logging.py                # Logging con redacción de datos sensibles
-│   │   └── utils.py
-│   ├── models/                       # SQLAlchemy: Caso, Orden, Dispositivo, Auditoria, Notificacion, Hallazgo
-│   ├── schemas/                      # Pydantic: validación de entrada/salida de la API
-│   ├── services/
-│   │   ├── gating_service.py         # Motor de 3 validaciones: dispositivo / tiempo / operador
-│   │   ├── auditoria_service.py      # Registro y verificación de cadena de hashes
-│   │   ├── network_control.py        # Allow-list de red por caso (iptables)
-│   │   ├── consola_service.py        # Consola manual, gateada, binarios en allow-list
-│   │   ├── tools_service.py          # nmap/whois/dig/httpx/testssl/nuclei, gateados
-│   │   ├── llm_service.py            # Interfaz evidence-first con Ollama
-│   │   ├── cve_search_service.py     # Verificación de CVEs contra NVD
-│   │   ├── analisis_ia_service.py    # Orquestador: herramienta → LLM → validación → Hallazgo
-│   │   ├── orden_service.py          # Alcance, hallazgo casual (Art. 286)
-│   │   ├── cese_service.py           # Registro de cese (evento auditable, sin mecanismo técnico)
-│   │   ├── notificacion_service.py   # Notificación al imputado/defensor (Art. 285)
-│   │   ├── caso_service.py           # Ciclo de vida del caso, cierre con hash final
-│   │   └── isp_service.py            # Placeholder de enlace con ISP
-│   ├── api/endpoints/                # Routers FastAPI
-│   └── workers/                      # Tareas asíncronas Celery
+│ ├── main.py # arranque de la API
+│ ├── core/
+│ │ ├── config.py # configuración centralizada
+│ │ ├── security.py # JWT, hashing, control de roles
+│ │ ├── logging.py # logging con redacción de datos sensibles
+│ │ └── utils.py
+│ ├── models/ # Caso, Orden, Dispositivo, Auditoria, Notificacion, Hallazgo
+│ ├── schemas/ # validación de entrada/salida de la API
+│ ├── services/
+│ │ ├── gating_service.py # valida dispositivo / tiempo / operador en cada acción
+│ │ ├── auditoria_service.py # registro y verificación de la cadena de hashes
+│ │ ├── network_control.py # allow-list de red por caso (iptables)
+│ │ ├── consola_service.py # consola manual, gateada, binarios en lista blanca
+│ │ ├── tools_service.py # nmap/whois/dig/httpx/testssl/nuclei, gateados
+│ │ ├── llm_service.py # interfaz con el modelo local (Ollama)
+│ │ ├── cve_search_service.py # verificación de CVEs contra NVD
+│ │ ├── analisis_ia_service.py # une herramienta, LLM y validación en un solo pipeline
+│ │ ├── orden_service.py # alcance de la orden, hallazgo casual
+│ │ ├── cese_service.py # registro de cese como evento auditable
+│ │ ├── notificacion_service.py # notificación al imputado/defensor
+│ │ ├── caso_service.py # ciclo de vida del caso, cierre con hash final
+│ │ └── isp_service.py # placeholder de enlace con proveedores
+│ ├── api/endpoints/ # rutas de la API
+│ ├── cli/ # el CLI interactivo (ui.py, sesion.py, consola.py, menu_analisis.py)
+│ └── workers/ # tareas asíncronas con Celery
+├── sharur_cli.py # entrada del CLI
 ├── tests/{unit,integration,e2e}/
-├── alembic/                          # Migraciones de BD
-├── docker/                           # Dockerfile + docker-compose
-├── Modelfile                         # Definición del modelo custom "sharur-qwen" para Ollama
-└── .github/workflows/                # CI (lint+test) y Deploy
-```
+├── alembic/ # migraciones de base de datos
+├── docker/ # Dockerfile y docker-compose
+├── Modelfile # define el modelo "sharur-qwen" para Ollama
+└── .github/workflows/ # CI y deploy
 
----
 
-## Flujo de uso
+## Poniéndolo a andar
 
-1. **Creación del caso** — `POST /api/v1/casos` — ID, número de causa, carátula, juzgado.
-2. **Carga de la orden y su alcance** — `POST /api/v1/ordenes` (fundamentación de
-   proporcionalidad/necesidad/idoneidad obligatoria) + `POST /api/v1/ordenes/{id}/personal`
-   (personal autorizado) + `POST /api/v1/dispositivos` (cada dispositivo, con su sub-alcance de
-   datos propio). **Nada se ejecuta hasta que esto está cargado.**
-3. **Menú principal**:
-   - **Análisis automatizado con IA** — `POST /api/v1/intervenciones/analisis-ia`: corre una
-     herramienta gateada, pasa la evidencia al LLM, valida cada hallazgo propuesto contra la
-     evidencia cruda (cita textual exacta) y contra NVD (CVE real), y persiste el resultado con
-     nivel de confianza (`CONFIRMADA` / `PROBABLE` / `DESCARTADA`).
-   - **Consola manual** — `POST /api/v1/intervenciones/consola`: ejecuta comandos de
-     reconocimiento autorizados, dentro del perímetro de red allow-list del caso.
-4. **Control continuo de alcance (gating)** — cada acción pasa por `gating_service.evaluar_gating()`
-   antes de ejecutarse. Si falla dispositivo/tiempo/operador: rechazo automático, registro
-   detallado del intento en auditoría (`ACCION_RECHAZADA_GATING`).
-5. **Cese y notificación** — `POST /api/v1/dispositivos/{id}/cese` registra el cese por
-   dispositivo (pueden ser momentos distintos); `notificacion_service` genera el registro de
-   notificación al imputado/defensor con el contenido armado automáticamente desde los datos de
-   la orden.
-6. **Cierre** — `POST /api/v1/casos/{id}/cerrar`, manual (exige cese en todos los dispositivos) o
-   forzado/automático (por expulsión). En ambos casos se genera el hash de integridad del
-   reporte final.
+Sharur necesita tres cosas corriendo al mismo tiempo: la base de datos, el modelo de IA local
+(en su propia terminal) y la API o el CLI (en otra). Vamos paso a paso.
 
----
+### Lo que necesitás antes de empezar
 
-## Auditoría con hash encadenado
+Linux (se probó sobre Debian, Ubuntu y Kali; Windows funciona vía WSL2), Python 3.12 o más
+nuevo, Git, y al menos 8.4 GB de RAM libres si vas a usar el modelo de IA completo (hay una
+variante más liviana si tu máquina tiene menos memoria, lo vemos más abajo).
 
-Cada `EventoAuditoria` incluye el hash del evento anterior dentro del mismo caso. Alterar
-cualquier campo de un evento pasado cambia su hash, lo cual invalida el `hash_evento_anterior`
-de todos los eventos posteriores — propiedad detectable mediante:
-
-```
-GET /api/v1/casos/{caso_id}/auditoria/verificar
-```
-
-Ver `tests/unit/test_auditoria_service.py` para los casos de alteración de contenido y ruptura
-de cadena.
-
-**Nota técnica de robustez:** el hash se calcula sobre `timestamp_iso`, un string ISO-8601
-persistido de forma independiente a la columna `timestamp` (`DateTime`). Esto evita falsos
-positivos de "alteración" que surgirían si el motor de base de datos no preserva con fidelidad
-perfecta el `tzinfo` de un `datetime` al recargarlo tras un `commit()` (se observó este
-comportamiento en SQLite durante desarrollo). Por la misma razón, `gating_service.py` normaliza
-cualquier `datetime` proveniente de la base con `core.utils.ensure_aware_utc()` antes de
-compararlo contra `utc_now()`.
-
----
-
-## Setup de desarrollo
-
-Sharur SAIC necesita **tres cosas corriendo al mismo tiempo**: la base de datos (Postgres),
-el modelo de IA local (Ollama, en su propia terminal) y la API (Sharur, en otra terminal).
-La lógica es la misma que en el METATRON original (`ollama run metatron-qwen` en una terminal,
-`python metatron.py` en otra) — acá se agrega Postgres porque reemplazamos SQLite/MariaDB por
-un motor mas robusto para producción.
-
-### 0. Requisitos previos
-
-- Linux (probado sobre Debian/Ubuntu/Kali). Windows vía WSL2 también funciona.
-- Python 3.12+
-- Al menos 8.4 GB de RAM libre (el modelo base `qwen3.5-abliterated:9b` lo necesita; si tenés
-  menos, usá la variante `4b`, ver paso 3).
-- Git
-
-### 1. Clonar el repositorio
+### Traer el proyecto
 
 ```bash
-git clone <URL_DEL_REPOSITORIO_SHARUR_SAIC>
-cd sharur-saic
+git clone https://github.com/totokugelmann/sharur.git
+cd sharur
 ```
 
-*(Reemplazá `<URL_DEL_REPOSITORIO_SHARUR_SAIC>` por la URL real una vez que subas este código a
-tu propio repositorio Git — este proyecto se te entregó como código fuente, todavía no está
-publicado en ningún remoto.)*
-
-### 2. Crear el entorno virtual e instalar dependencias de Python
+### Preparar el entorno de Python
 
 ```bash
 python3 -m venv venv
@@ -184,128 +103,119 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Instalar las herramientas de reconocimiento del sistema
+Cada vez que abras una terminal nueva para trabajar en el proyecto vas a necesitar activar el
+entorno de nuevo con `source venv/bin/activate` antes de correr cualquier cosa — si te aparece
+un error de módulo no encontrado, lo más probable es que te hayas olvidado este paso.
 
-Estas son las que `tools_service.py` y `consola_service.py` invocan por `subprocess`. Todas de
-reconocimiento pasivo/semi-activo — ninguna de explotación:
+### Instalar las herramientas de reconocimiento
+
+Son las que la consola y el menú de análisis terminan invocando:
 
 ```bash
 sudo apt update
 sudo apt install -y nmap whois dnsutils curl iptables
 ```
 
-`httpx`, `nuclei` y `testssl.sh` (de ProjectDiscovery / Testssl) no vienen empaquetados en los
-repos de apt; instalalos siguiendo la documentación oficial de cada proyecto, o usá la imagen
-Docker (`docker/Dockerfile`), que ya los resuelve.
+`httpx`, `nuclei` y `testssl.sh` no vienen empaquetados en los repositorios de apt — instalalos
+siguiendo la documentación de cada proyecto, o usá la imagen Docker del repositorio, que ya los
+trae resueltos.
 
-### 4. Instalar y levantar Ollama (el modelo de IA local)
-
-**Paso a paso, igual que en METATRON:**
+### Levantar el modelo de IA local
 
 ```bash
-# 4.1 — Instalar Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
-# 4.2 — Descargar el modelo base (requiere ~8.4 GB de RAM)
 ollama pull huihui_ai/qwen3.5-abliterated:9b
-
-# Si tu equipo tiene menos RAM, usá la variante mas liviana:
-#   ollama pull huihui_ai/qwen3.5-abliterated:4b
-# y despues editá la linea "FROM" del Modelfile para que apunte a esa variante.
-
-# 4.3 — Crear el modelo custom "sharur-qwen" a partir del Modelfile del proyecto
-#       (contexto de 16.384 tokens, temperatura 0.7, top_k 10, top_p 0.9 — ver Modelfile)
-ollama create sharur-qwen -f Modelfile
-
-# 4.4 — Confirmar que el modelo quedo creado
-ollama list
-# deberias ver "sharur-qwen" en el listado
 ```
 
-**Terminal 1 — dejar el modelo cargado en memoria y corriendo:**
+Si tu máquina tiene poca RAM, hay una variante más chica:
+
+```bash
+ollama pull huihui_ai/qwen3.5-abliterated:4b
+```
+
+En ese caso editá la línea `FROM` del archivo `Modelfile` en la raíz del proyecto para que
+apunte a esa variante antes del siguiente paso.
+
+```bash
+ollama create sharur-qwen -f Modelfile
+ollama list
+```
+
+Deberías ver `sharur-qwen` en el listado. Ahora dejalo corriendo en una terminal aparte, que va
+a quedar reservada para esto mientras trabajás:
 
 ```bash
 ollama run sharur-qwen
 ```
 
-Esperá a ver el prompt `>>>`. Eso significa que el modelo esta cargado y listo. Dejá esta
-terminal abierta en segundo plano — `llm_service.py` le habla por HTTP a
-`http://localhost:11434` (ver `OLLAMA_URL` en la configuración), así que Ollama tiene que
-seguir corriendo mientras uses Sharur.
+Cuando veas el prompt `>>>`, el modelo está cargado y esperando. No cierres esta terminal.
 
-### 5. Base de datos: instalar Postgres, crear la base y armar la `DATABASE_URL`
+### Base de datos
 
 ```bash
 sudo apt install -y postgresql postgresql-contrib
 sudo systemctl start postgresql
 sudo systemctl enable postgresql
 
-# Crear el usuario y la base que va a usar Sharur
 sudo -u postgres psql -c "CREATE USER sharur WITH PASSWORD 'elegí_una_contraseña_segura';"
 sudo -u postgres psql -c "CREATE DATABASE sharur_saic OWNER sharur;"
 ```
 
-La `DATABASE_URL` sigue el formato `postgresql+psycopg2://usuario:contraseña@host:puerto/nombre_de_base`.
-Con lo creado arriba, en tu `.env` (ver paso 6) quedaría:
+Con eso, la URL de conexión que vas a usar en el siguiente paso queda:
 
-```
-DATABASE_URL=postgresql+psycopg2://sharur:elegí_una_contraseña_segura@localhost:5432/sharur_saic
-```
+postgresql+psycopg2://sharur:elegí_una_contraseña_segura@localhost:5432/sharur_saic
 
-Si en cambio preferís levantar Postgres con Docker en vez de instalarlo en el sistema, usá
-directamente `docker compose -f docker/docker-compose.yml up db` — ese servicio ya crea usuario
-`sharur`/`sharur` y base `sharur_saic` automáticamente (ver variables `POSTGRES_*` en
-`docker-compose.yml`), y no hace falta este paso manual.
 
-### 6. Configurar el `.env`
+Si preferís levantar Postgres con Docker en vez de instalarlo directo en tu sistema, `docker
+compose -f docker/docker-compose.yml up db` crea usuario y base automáticamente, y podés saltear
+este paso manual.
+
+### Configuración
 
 ```bash
 cp .env.example .env
 ```
 
-Editá `.env` y completá, como mínimo:
+Abrí `.env` y completá al menos:
 
-- **`DATABASE_URL`** — la que armaste en el paso 5.
-- **`SECRET_KEY`** — la clave con la que se firman los tokens JWT (`app/core/security.py`).
-  **Nunca** dejes el valor de ejemplo (`CHANGE_ME_...`). Generá una clave larga y aleatoria con:
+- `DATABASE_URL` con la cadena que armaste arriba.
+- `SECRET_KEY`, la clave con la que se firman las sesiones. Nunca dejes el valor de ejemplo —
+  generá una nueva con:
 
-  ```bash
+```bash
   python3 -c "import secrets; print(secrets.token_hex(32))"
-  ```
+```
 
-  Copiá el resultado como valor de `SECRET_KEY` en el `.env`.
-- El resto de las variables (`OLLAMA_URL`, `OLLAMA_MODEL=sharur-qwen`, `NVD_API_KEY` opcional,
-  `REDIS_URL`, etc.) ya tienen valores por defecto razonables para desarrollo local — revisalas
-  en `.env.example`, pero no son obligatorias para levantar el sistema por primera vez.
+El resto de las variables (`OLLAMA_URL`, `OLLAMA_MODEL`, `REDIS_URL`, etc.) ya vienen con
+valores razonables para trabajar en desarrollo, así que no hace falta tocarlas para arrancar por
+primera vez.
 
-### 7. Crear las tablas (migraciones de Alembic)
+### Crear las tablas
 
 ```bash
 alembic upgrade head
 ```
 
-Esto lee `alembic/env.py`, que a su vez toma `DATABASE_URL` de tu `.env`, y crea todas las
-tablas (`casos`, `ordenes`, `dispositivos`, `eventos_auditoria`, etc.) en la base Postgres que
-armaste en el paso 5.
+Esto crea todas las tablas del sistema en la base que acabás de armar. Si más adelante cambiás
+algún modelo, generás la migración correspondiente con `alembic revision --autogenerate -m
+"descripción"` y la aplicás de la misma forma.
 
-### 8. Levantar Sharur
+### Arrancar la API
 
-**Terminal 2 — con Ollama corriendo en la Terminal 1, en una terminal nueva:**
+En una segunda terminal (la primera queda ocupada por Ollama):
 
 ```bash
-source venv/bin/activate     # si no esta ya activado en esta terminal
+source venv/bin/activate
 uvicorn app.main:app --reload
 ```
 
-La API queda escuchando en `http://localhost:8000`. Podés confirmar que todo esta conectado
-correctamente entrando a:
+Con eso arriba, `http://localhost:8000/health` te confirma que la API está viva, y
+`http://localhost:8000/docs` te da una interfaz donde probar cada endpoint sin tener que armar
+requests a mano.
 
-- `http://localhost:8000/health` — chequeo básico de que la API levantó.
-- `http://localhost:8000/docs` — documentación interactiva (Swagger) de todos los endpoints.
-
-**Login de desarrollo:** el sistema todavía no está conectado a un IdP institucional (ver
-sección "Pendiente" al final), así que hay dos usuarios de prueba hardcodeados en
-`app/api/endpoints/auth.py` para poder probar la API de punta a punta:
+Para entrar necesitás loguearte. Todavía no hay conexión con un sistema de usuarios
+institucional, así que por ahora hay dos cuentas de prueba:
 
 | Usuario     | Contraseña    | Rol         |
 |-------------|---------------|-------------|
@@ -318,82 +228,145 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
   -d "username=operador1&password=operador123"
 ```
 
-Devuelve un `access_token` JWT que se usa como `Authorization: Bearer <token>` en el resto de
-los endpoints. **Estas credenciales son solo para desarrollo — nunca las dejes activas en un
-despliegue real** (ver nota en el propio archivo `auth.py`).
+Te devuelve un token que usás como `Authorization: Bearer <token>` en el resto de los pedidos.
+Estas credenciales son solo para desarrollo, nunca deberían quedar activas en un despliegue
+real.
 
-**Resumen visual (dos terminales, igual que METATRON):**
+### Worker de tareas asíncronas (opcional)
 
-```
-Terminal 1                          Terminal 2
------------                         -----------
-$ ollama run sharur-qwen            $ source venv/bin/activate
->>> (modelo cargado, dejar          $ uvicorn app.main:app --reload
-     corriendo en segundo plano)    INFO: Uvicorn running on http://0.0.0.0:8000
-```
-
-### 9. (Opcional) Worker de Celery, si vas a probar tareas asíncronas
-
-En una **tercera terminal**, con el entorno virtual activado:
+Si vas a probar los escaneos largos que corren en segundo plano, necesitás Redis y un worker de
+Celery corriendo, en una tercera terminal:
 
 ```bash
+sudo apt install redis-server
+sudo systemctl start redis
 celery -A app.workers.celery_app worker --loglevel=info
 ```
 
-Esto requiere Redis corriendo (`sudo apt install redis-server && sudo systemctl start redis`,
-o `docker compose -f docker/docker-compose.yml up redis`).
+### Todo junto con Docker
 
-### Todo junto con Docker (alternativa a los pasos 3, 5, 7, 8, 9)
-
-Si no querés instalar Postgres/Redis/herramientas de reconocimiento a mano en tu sistema, Docker
-Compose levanta la API, Postgres, Redis, el worker y el beat de Celery en un solo comando —
-**pero Ollama seguís levantándolo aparte, en tu Terminal 1, con los pasos del punto 4**, porque
-corre mejor con acceso directo a la GPU/CPU del host que dentro de un contenedor:
+Si no querés instalar Postgres, Redis y las herramientas de reconocimiento a mano, Docker
+Compose levanta la API, la base, Redis y los workers en un solo comando. Ollama seguís
+levantándolo aparte, en su propia terminal, porque anda mejor con acceso directo al hardware del
+equipo que dentro de un contenedor:
 
 ```bash
 cp .env.example .env
-# completá DATABASE_URL, SECRET_KEY, etc. igual que en el paso 6
-
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-### Tests
+### Correr los tests
 
 ```bash
 pytest tests/unit -v
 ```
 
-Los tests unitarios usan una base SQLite en memoria (ver `tests/conftest.py`), así que no
-necesitan que Postgres ni Ollama estén corriendo.
+Usan una base en memoria, así que no necesitás tener Postgres ni Ollama corriendo para
+ejecutarlos.
 
----
+## Usando el CLI
 
-## Roles
+Además de la API, el proyecto tiene un CLI de terminal que va guiando paso a paso — pensado
+para que no tengas que armar cada request a mano. No duplica ninguna lógica: llama exactamente
+a los mismos servicios que usa la API, así que todo lo que hagas desde acá queda validado y
+auditado de la misma forma.
 
-Solo existen dos roles de login. Jueces, fiscales y defensores **no** son cuentas del
-sistema: su intervención es el proceso judicial de siempre (orden firmada en papel/expediente),
-y el operador es quien carga esos datos ya resueltos (número de orden, juez firmante,
-fundamentos, datos del imputado/defensor) como texto dentro de la orden — ver
-`schemas/orden.py`, donde `juez_firmante`, `defensor_nombre`, etc. son campos `string`, no
-cuentas de usuario.
+```bash
+python sharur_cli.py
+```
 
-| Rol        | Permisos                                                                 |
-|------------|---------------------------------------------------------------------------|
-| `operador` | Control funcional total: casos, órdenes, dispositivos, intervenciones (análisis IA, consola), cese, notificación, consulta de auditoría |
-| `admin`    | Igual que `operador` a nivel de API, más gestión de cuentas de operadores (fuera de este repo, vía IdP institucional) |
+El flujo empieza pidiéndote tu usuario, que tiene que coincidir con el personal autorizado de la
+orden que vayas a operar — si no coincide, cada acción que intentes va a ser rechazada. Después
+elegís o creás un caso, y si el caso no tiene una orden cargada, te la pide completa: los
+fundamentos que justifican la medida, la ventana temporal durante la cual está vigente, los
+datos del imputado y su defensor, quién más está autorizado a operar, y los dispositivos dentro
+del alcance.
 
-El rol de API es una primera barrera (¿esta cuenta puede usar el sistema?); la autorización
-real y granular por caso/dispositivo la resuelve `gating_service.py` contra la tabla
-`PersonalAutorizado` de cada orden (¿este operador específico está habilitado para actuar sobre
-este dispositivo específico, ahora?). Un operador con cuenta válida en el sistema puede seguir
-siendo rechazado por el gating si no figura como personal autorizado de la orden correspondiente.
+Cada dispositivo se carga con un identificador descriptivo — puede ser el modelo, un IMEI, un
+dominio, o una IP si es fija — y opcionalmente un rango de red, útil cuando la IP del
+dispositivo es dinámica y no se conoce de antemano, así que hay que escanear el rango completo
+para localizarlo. El sistema no intenta adivinar automáticamente cuál de los equipos que
+aparezcan en ese rango es el dispositivo autorizado — eso depende de cosas como MAC o hostname,
+que se pueden falsear, así que esa verificación queda en tus manos, revisando la evidencia
+después de cada escaneo.
 
----
+Con el dispositivo elegido, entrás al menú principal:
+nmap
+whois
+dig
+httpx
+testssl
+nuclei
+Ver hallazgos registrados en este dispositivo
+Ver auditoría del caso
+Ejecutar cese sobre este dispositivo
+Cambiar de dispositivo
+Consola
+Salir
 
-## Pendiente / fuera de este alcance
+Al elegir cualquiera de las primeras seis opciones, te pregunta el objetivo antes de correr
+nada — te sugiere el identificador o el rango del dispositivo, pero podés escribir otro valor.
+Si elegís nmap, además te pregunta qué perfil de escaneo usar: default, rápido, completo, o
+sigiloso. Cuando el resultado es exitoso, te ofrece mandar esa evidencia al modelo de IA para
+que sugiera vulnerabilidades aplicables, verificadas contra la base de datos real de CVEs antes
+de guardarse como hallazgo.
 
-- Integración real con IdP institucional (LDAP/AD) en `app/api/endpoints/auth.py` — hoy hay un
-  placeholder en memoria para desarrollo.
-- `isp_service.py` — enlace formal con proveedores (Art. 284), pendiente de definición del canal.
-- Cualquier mecanismo técnico de acceso remoto a un dispositivo específico — deliberadamente
-  fuera del alcance de este repositorio (ver sección de límite arriba).
+La consola, al final de la lista, se siente como abrir una terminal en tu propia máquina —
+escribís el comando, ves el resultado — con la diferencia de que solo podés invocar los
+binarios de reconocimiento permitidos, nunca un shell libre, y cada línea que ejecutás queda
+registrada.
+
+sharur(192.0.2.10)> nmap -sV -F 192.0.2.10
+sharur(192.0.2.10)> whois example.com
+sharur(192.0.2.10)> salir
+
+
+Al terminar la sesión, el CLI te ofrece cerrar el caso. Para eso exige que todos los
+dispositivos tengan su cese ya ejecutado, o si preferís, podés dejarlo abierto y retomarlo
+después.
+
+## Quién puede hacer qué
+
+Solo existen dos roles con cuenta en el sistema. Jueces, fiscales y defensores no son usuarios
+de Sharur — su intervención sigue siendo el proceso judicial de siempre, y es el operador quien
+carga esos datos ya resueltos (número de orden, quién la firmó, los fundamentos) como texto
+dentro del sistema.
+
+El rol `operador` tiene control funcional completo: casos, órdenes, dispositivos,
+intervenciones, cese, notificación, y consulta de auditoría. El rol `admin` tiene lo mismo, más
+la gestión de cuentas de otros operadores, algo que en un despliegue real vendría de un sistema
+de usuarios institucional en vez de manejarse acá.
+
+Tener una cuenta válida es solo la primera barrera. La autorización real, la que importa, la
+resuelve el motor de validación contra la lista de personal autorizado de cada orden específica
+— un operador con cuenta activa en el sistema puede seguir siendo rechazado si no figura como
+autorizado en la orden sobre la que está intentando actuar.
+
+## Cómo funciona la auditoría
+
+Cada evento que se registra incluye el hash del evento inmediatamente anterior dentro del mismo
+caso. Si alguien intenta alterar un registro pasado —cambiar una descripción, borrar un
+intento fallido— el hash de ese evento cambia, y con él deja de coincidir con lo que el
+siguiente evento tiene guardado como referencia. La ruptura queda visible apenas se recalcula la
+cadena:
+
+GET /api/v1/casos/{caso_id}/auditoria/verificar
+
+
+o desde la opción 8 del menú del CLI.
+
+Un detalle técnico que vale la pena mencionar: el hash se calcula sobre una marca de tiempo
+guardada como texto, separada de la columna de fecha propiamente dicha. Esto es porque durante
+el desarrollo se encontró que algunos motores de base de datos no siempre conservan con
+exactitud la información de zona horaria al recargar un dato después de guardarlo, lo cual
+podía generar falsas alarmas de alteración sobre registros que en realidad nunca se tocaron.
+Guardar el texto exacto que se usó para el cálculo evita ese problema.
+
+## Lo que todavía falta
+
+- Conectar el login a un sistema de usuarios institucional real, en vez de las dos cuentas de
+  desarrollo que hay hoy.
+- Definir el canal formal de comunicación con proveedores de Internet — el módulo existe como
+  punto de extensión, pero no hace nada todavía.
+- Cualquier mecanismo técnico de acceso remoto a un dispositivo específico queda,
+  deliberadamente, fuera de este repositorio.

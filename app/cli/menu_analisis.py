@@ -1,250 +1,256 @@
 """
 Sharur SAIC - app/cli/menu_analisis.py
 
-Menu principal de intervencion sobre un dispositivo ya
-seleccionado: las herramientas automatizadas de reconocimiento
-numeradas, y al final de la lista, la consola.
+Menú principal de análisis. Todo por consola estándar (print/input).
+Sin capa de UI.
 
-Cada opcion pasa por evaluar_gating() antes de ejecutar (ya
-resuelto dentro de tools_service / consola_service / gating_service
--- este modulo no reimplementa esa logica, solo la presenta como
-menu).
+Estructura:
+  [1] Redes       → nmap (descubrimiento de hosts en un rango)
+  [2] Objetivos   → nmap (puertos y servicios de un target)
+  [3] Consola libre
+  [4] Ver auditoría del caso
+  [5] Salir (cierra el caso)
+
+MVP: nmap, consola libre y el módulo de IA (analisis_ia_service con
+Ollama + NVD) quedan como puntos de integración marcados. Se activan
+cuando tools_service y consola_service se adapten a la firma del MVP
+(sin orden ni dispositivo).
+
+Todo lo que se ejecute queda firmado en la cadena de auditoría por
+intermedio de auditoria_service (hash encadenado por caso).
 """
 
 from sqlalchemy.orm import Session
 
-from app.cli import ui
-from app.cli.consola import modo_consola
-from app.models.dispositivo import Dispositivo
-from app.models.orden import Orden
-from app.services import (
-    analisis_ia_service,
-    auditoria_service,
-    cese_service,
-    notificacion_service,
-    tools_service,
-)
-from app.services.tools_service import ToolResult
-
-# Orden de la lista tal como la ve el operador. El primer elemento
-# de cada tupla es la etiqueta de menu; el segundo, la funcion de
-# tools_service ya gateada que ejecuta la herramienta.
-_HERRAMIENTAS = [
-    ("nmap", "nmap — reconocimiento de puertos y servicios", tools_service.run_nmap),
-    ("whois", "whois — datos de registro del dominio/IP", tools_service.run_whois),
-    ("dig", "dig — resolución DNS", tools_service.run_dig),
-    ("httpx", "httpx — detección de tecnologías HTTP", tools_service.run_httpx),
-    ("testssl", "testssl — análisis de configuración TLS/SSL", tools_service.run_testssl),
-    ("nuclei", "nuclei — detección de CVEs/tecnologías conocidas", tools_service.run_nuclei_deteccion),
-]
+from app.models.caso import Caso
 
 
-def _elegir_objetivo(dispositivo: Dispositivo) -> str:
-    """
-    Pregunta el objetivo a usar para el escaneo. Por defecto sugiere
-    el identificador del dispositivo, pero si hay un rango de red
-    autorizado cargado (IP dinamica, se necesita localizar el
-    dispositivo), lo ofrece como alternativa -- y de todos modos deja
-    escribir cualquier otro valor dentro de lo que la orden autoriza.
-
-    La verificacion de que el equipo hallado en el objetivo elegido es
-    efectivamente el dispositivo autorizado es responsabilidad manual
-    del operador (revisando MAC/hostname/fingerprint en la evidencia
-    despues), el sistema no lo automatiza.
-    """
-    if dispositivo.rango_red_autorizado:
-        ui.info(
-            f"  Identificador registrado: {dispositivo.identificador} | "
-            f"Rango de red autorizado: {dispositivo.rango_red_autorizado}"
-        )
-        ui.info("  Usá el identificador si conocés la IP exacta, o el rango para localizar el dispositivo.")
-        return ui.prompt("  Objetivo del escaneo", default=dispositivo.rango_red_autorizado)
-
-    return ui.prompt("  Objetivo del escaneo", default=dispositivo.identificador)
+def _prompt(msg: str, default: str = None) -> str:
+    sufijo = f" [{default}]" if default else ""
+    valor = input(f"{msg}{sufijo}: ").strip()
+    return valor or default or ""
 
 
-def _elegir_perfil_nmap() -> str:
-    opciones = [
-        ("default", "default — balance estándar (-sV -sC --top-ports 1000)"),
-        ("rapido", "rápido — top puertos más comunes, veloz (-sV -F)"),
-        ("completo", "completo — los 65535 puertos, más lento (-sV -sC -p-)"),
-        ("sigiloso", "sigiloso — SYN scan lento, menos detectable (-sS -T2, requiere privilegios)"),
-    ]
-    return ui.menu("Perfil de escaneo (nmap)", opciones)
+def _pausar() -> None:
+    input("\nPresione ENTER para continuar...")
 
 
-def _mostrar_resultado_tool(resultado: ToolResult) -> None:
-    ui.subtitulo(f"Resultado: {resultado.tool} (status={resultado.status})")
-    if resultado.status == "rechazado_gating":
-        ui.error(f"Rechazado por gating: {resultado.stderr}")
-        return
-    if resultado.status == "not_found":
-        ui.error(resultado.stderr)
-        return
+# ─────────────────────────────────────────────
+# Auditoría
+# ─────────────────────────────────────────────
 
-    print(resultado.output[:4000] or "(sin salida)")
-    if resultado.stderr:
-        ui.advertencia(f"stderr: {resultado.stderr[:500]}")
-    ui.info(f"Duración: {resultado.duration_seconds:.2f}s | hash evidencia: {resultado.evidence_hash[:16]}...")
-
-
-def _ejecutar_herramienta(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, codigo: str, fn) -> None:
-    target = _elegir_objetivo(dispositivo)
-
-    if codigo == "nmap":
-        perfil = _elegir_perfil_nmap()
-        resultado = fn(db, caso_id, dispositivo.id, username, target, profile=perfil)
-    else:
-        resultado = fn(db, caso_id, dispositivo.id, username, target)
-
-    db.commit()
-    _mostrar_resultado_tool(resultado)
-
-    if resultado.status == "ok" and ui.prompt_si_no(
-        "¿Enviar esta evidencia al modelo de IA para sugerir CVEs aplicables?", default=True
-    ):
-        _analisis_ia_sobre_resultado(db, caso_id, dispositivo, username, codigo, resultado)
-
-
-def _analisis_ia_sobre_resultado(db: Session, caso_id: int, dispositivo: Dispositivo, username: str, herramienta: str, resultado_tool) -> None:
-    ui.info("Consultando al modelo local (Ollama) y verificando contra NVD, puede tardar unos segundos...")
-    try:
-        hallazgos = analisis_ia_service.analizar_evidencia(
-            db, caso_id=caso_id, dispositivo_id=dispositivo.id, username=username,
-            herramienta=herramienta, resultado_tool=resultado_tool,
-        )
-        db.commit()
-    except ValueError as exc:
-        ui.error(str(exc))
-        return
-
-    if not hallazgos:
-        ui.info("El modelo no propuso ningún hallazgo verificable sobre esta evidencia.")
-        return
-
-    filas = [
-        [h.id, h.cve_id or "-", h.severidad.value, h.confianza.value, h.titulo[:40]]
-        for h in hallazgos
-    ]
-    ui.tabla(["ID", "CVE", "Severidad", "Confianza", "Título"], filas)
-
-
-def _ver_hallazgos(db: Session, dispositivo: Dispositivo) -> None:
-    from app.models.notificacion import Hallazgo
-
-    hallazgos = (
-        db.query(Hallazgo)
-        .filter(Hallazgo.dispositivo_id == dispositivo.id)
-        .order_by(Hallazgo.id.desc())
-        .all()
-    )
-    ui.subtitulo(f"Hallazgos registrados — dispositivo {dispositivo.identificador}")
-    filas = [
-        [h.id, h.cve_id or "-", h.severidad.value, h.confianza.value, h.herramienta_origen, h.titulo[:35]]
-        for h in hallazgos
-    ]
-    ui.tabla(["ID", "CVE", "Severidad", "Confianza", "Herramienta", "Título"], filas)
-
-
-def _ver_auditoria(db: Session, caso_id: int) -> None:
+def _mostrar_auditoria(db: Session, caso: Caso) -> None:
     from app.models.auditoria import EventoAuditoria
 
     eventos = (
         db.query(EventoAuditoria)
-        .filter(EventoAuditoria.caso_id == caso_id)
+        .filter(EventoAuditoria.caso_id == caso.id)
         .order_by(EventoAuditoria.secuencia.desc())
         .limit(25)
         .all()
     )
-    ui.subtitulo("Últimos 25 eventos de auditoría (más reciente primero)")
-    filas = [
-        [e.secuencia, e.tipo_evento.value, e.actor_username or "-", e.descripcion[:50]]
-        for e in eventos
-    ]
-    ui.tabla(["Seq", "Tipo", "Actor", "Descripción"], filas)
-
-    if ui.prompt_si_no("¿Verificar integridad de la cadena de hashes?", default=False):
-        resultado = auditoria_service.verificar_cadena(db, caso_id)
-        if resultado["integra"]:
-            ui.ok(f"Cadena íntegra. Total de eventos: {resultado['total_eventos']}")
-        else:
-            ui.error(f"CADENA ALTERADA: {resultado['detalle']}")
+    print()
+    print("=" * 60)
+    print(f"  ÚLTIMOS 25 EVENTOS DE AUDITORÍA — Caso #{caso.id}")
+    print("=" * 60)
+    if not eventos:
+        print("  (sin eventos)")
+        return
+    for e in eventos:
+        actor = e.actor_username or "-"
+        print(f"  [{e.secuencia:04d}] {e.tipo_evento.value:<22} {actor:<15} {e.descripcion[:60]}")
 
 
-def _ejecutar_cese(db: Session, dispositivo: Dispositivo, username: str) -> bool:
-    ui.subtitulo(f"Cese sobre dispositivo {dispositivo.identificador}")
-    if not ui.prompt_si_no("¿Confirmás que el objetivo se cumplió y se debe ejecutar el cese?", default=False):
-        return False
+# ─────────────────────────────────────────────
+# nmap — categoría Redes (descubrimiento)
+# ─────────────────────────────────────────────
 
-    notas = ui.prompt("Notas del cese", requerido=False)
-    try:
-        cese_service.ejecutar_cese(db, dispositivo, ejecutado_por=username, actor_username=username, notas=notas or None)
-        db.commit()
-    except ValueError as exc:
-        ui.error(str(exc))
-        return False
+_PERFILES_RED = {
+    "1": ("descubrimiento", "-sn",                "Ping scan — sólo descubre hosts vivos"),
+    "2": ("top_puertos",    "-sV --top-ports 100","Top 100 puertos con detección de versión"),
+    "3": ("completo",       "-sV -p-",            "Los 65535 puertos con detección de versión"),
+}
 
-    ui.ok("Cese registrado. El dispositivo queda bloqueado para nuevas acciones (gating).")
 
-    if ui.prompt_si_no("¿Generar la notificación al imputado/defensor ahora?", default=True):
-        rol = ui.prompt("Destinatario: 'imputado' o 'defensor'", default="defensor")
-        nombre = ui.prompt("Nombre del destinatario")
-        notif = notificacion_service.generar_notificacion(
-            db, dispositivo, destinatario_nombre=nombre, destinatario_rol=rol, actor_username=username
+def _nmap_redes(db: Session, caso: Caso) -> None:
+    print()
+    print("--- nmap · Redes ---")
+    target = _prompt("Rango o CIDR (ej: 192.168.1.0/24)")
+    if not target:
+        print("[!] Target vacío.")
+        return
+    print("Perfiles disponibles:")
+    for k, (nombre, flags, desc) in _PERFILES_RED.items():
+        print(f"  [{k}] {nombre:<16} {flags:<22} {desc}")
+    perfil_codigo = _prompt("Perfil", default="1")
+    perfil = _PERFILES_RED.get(perfil_codigo)
+    if not perfil:
+        print("[!] Perfil inválido.")
+        return
+    _ejecutar_nmap(db, caso, target, perfil[0], perfil[1], categoria="redes")
+
+
+# ─────────────────────────────────────────────
+# nmap — categoría Objetivos (puertos/servicios)
+# ─────────────────────────────────────────────
+
+_PERFILES_OBJETIVO = {
+    "1": ("default",  "-sV -sC --top-ports 1000", "Balance estándar"),
+    "2": ("rapido",   "-sV -F",                   "Top puertos, rápido"),
+    "3": ("completo", "-sV -sC -p-",              "Los 65535 puertos (lento)"),
+    "4": ("sigiloso", "-sS -T2",                  "SYN scan lento, menos detectable (requiere privilegios)"),
+}
+
+
+def _nmap_objetivos(db: Session, caso: Caso) -> None:
+    print()
+    print("--- nmap · Objetivos ---")
+    target = _prompt("IP o dominio del objetivo")
+    if not target:
+        print("[!] Target vacío.")
+        return
+    print("Perfiles disponibles:")
+    for k, (nombre, flags, desc) in _PERFILES_OBJETIVO.items():
+        print(f"  [{k}] {nombre:<10} {flags:<27} {desc}")
+    perfil_codigo = _prompt("Perfil", default="1")
+    perfil = _PERFILES_OBJETIVO.get(perfil_codigo)
+    if not perfil:
+        print("[!] Perfil inválido.")
+        return
+    _ejecutar_nmap(db, caso, target, perfil[0], perfil[1], categoria="objetivos")
+
+
+# ─────────────────────────────────────────────
+# Punto de integración con tools_service
+# ─────────────────────────────────────────────
+
+def _ejecutar_nmap(db: Session, caso: Caso, target: str,
+                   perfil_nombre: str, perfil_flags: str, categoria: str) -> None:
+    """
+    Punto de integración con tools_service.
+    En el MVP todavía NO se invoca: tools_service.run_nmap requiere
+    dispositivo_id, y en este flujo todavía no se cargan dispositivos.
+    Cuando adaptemos tools_service a la firma del MVP, aquí va la llamada:
+
+        resultado = tools_service.run_nmap(
+            db, caso_id=caso.id, dispositivo_id=None,
+            username=caso.creado_por, target=target, profile=perfil_nombre,
         )
         db.commit()
-        ui.ok(f"Notificación generada (id={notif.id}, hash={notif.hash_contenido[:16]}...).")
+        _mostrar_resultado(resultado)
+    """
+    print()
+    print("[i] Escaneo solicitado:")
+    print(f"    categoría : {categoria}")
+    print(f"    target    : {target}")
+    print(f"    perfil    : {perfil_nombre} ({perfil_flags})")
+    print()
+    print("[!] Pendiente: integrar tools_service.run_nmap (sin dispositivo).")
+    print("    Cuando esté cableado, la salida se firmará con SHA-256 y")
+    print("    se registrará como evidencia en la cadena de auditoría.")
+    _ofrecer_analisis_ia(caso, target, categoria)
 
-    return True
+
+def _ofrecer_analisis_ia(caso: Caso, target: str, categoria: str) -> None:
+    """
+    Módulo IA (analisis_ia_service). En el MVP todavía no está cableado.
+    Cuando se active:
+      - corre en paralelo a la consola consumiendo el stdout de cada herramienta
+      - consulta el LLM local (Ollama + sharur-qwen, ver Modelfile)
+      - verifica cada CVE sugerida contra NVD (cve_search_service)
+      - registra hallazgos verificados en la cadena de auditoría con hash
+
+    Nota de diseño (evidence-first): el LLM propone, NVD valida, el operador
+    acepta. Ningún hallazgo se firma sin pasar por NVD. Esto es no-negociable
+    para que el hallazgo sea defendible como prueba.
+    """
+    print()
+    print("[i] Análisis IA (Ollama + NVD): pendiente de integración en el MVP.")
+    print("    Cuando se active, esta evidencia se enviará al LLM local y los")
+    print("    CVEs sugeridos se verificarán contra NVD antes de firmarse.")
 
 
-def menu_intervencion(db: Session, caso_id: int, orden: Orden, dispositivo: Dispositivo, username: str) -> None:
+# ─────────────────────────────────────────────
+# Consola libre
+# ─────────────────────────────────────────────
+
+def _consola_libre(db: Session, caso: Caso) -> None:
+    """
+    Punto de integración con consola_service. Cuando se active:
+      - sólo permite binarios de la allow-list (config.py)
+      - cada comando y su salida se firman con SHA-256
+      - el resultado se envía al módulo IA en paralelo
+    """
+    print()
+    print("[i] Consola libre: pendiente de integración (consola_service).")
+    print("    Cuando se active, cada comando se validará contra la allow-list")
+    print("    de binarios y quedará firmado en la cadena de auditoría.")
+
+
+# ─────────────────────────────────────────────
+# Menús
+# ─────────────────────────────────────────────
+
+def _menu_redes(db: Session, caso: Caso) -> None:
     while True:
-        opciones = [(codigo, etiqueta) for codigo, etiqueta, _ in _HERRAMIENTAS]
-        opciones += [
-            ("hallazgos", "Ver hallazgos registrados en este dispositivo"),
-            ("auditoria", "Ver auditoría del caso"),
-            ("cese", "Ejecutar cese sobre este dispositivo"),
-            ("cambiar_dispositivo", "Cambiar de dispositivo"),
-            ("consola", "Consola (comandos autorizados, todo queda registrado)"),
-            ("salir", "Salir"),
-        ]
+        print()
+        print("=" * 60)
+        print("  REDES")
+        print("=" * 60)
+        print("  [1] nmap — descubrimiento de hosts")
+        print("  [2] Volver")
+        opcion = input("Opción: ").strip()
+        if opcion == "1":
+            _nmap_redes(db, caso)
+            _pausar()
+        elif opcion == "2":
+            return
+        else:
+            print("[!] Opción no válida.")
 
-        titulo_menu = f"Caso #{caso_id} · Orden {orden.numero_orden} · Dispositivo {dispositivo.identificador}"
-        eleccion = ui.menu(titulo_menu, opciones)
 
-        if eleccion == "salir":
-            if ui.confirmar_salida():
-                return
-            continue
+def _menu_objetivos(db: Session, caso: Caso) -> None:
+    while True:
+        print()
+        print("=" * 60)
+        print("  OBJETIVOS")
+        print("=" * 60)
+        print("  [1] nmap — puertos y servicios")
+        print("  [2] Volver")
+        opcion = input("Opción: ").strip()
+        if opcion == "1":
+            _nmap_objetivos(db, caso)
+            _pausar()
+        elif opcion == "2":
+            return
+        else:
+            print("[!] Opción no válida.")
 
-        if eleccion == "cambiar_dispositivo":
-            return  # el caller (main) vuelve a pedir dispositivo
 
-        if eleccion == "hallazgos":
-            _ver_hallazgos(db, dispositivo)
-            ui.pausar()
-            continue
+def menu_analisis(db: Session, caso: Caso) -> None:
+    while True:
+        print()
+        print("=" * 60)
+        print(f"  SHARUR — Caso #{caso.id} ({caso.numero_causa})")
+        print("=" * 60)
+        print("  [1] Redes")
+        print("  [2] Objetivos")
+        print("  [3] Consola libre")
+        print("  [4] Ver auditoría del caso")
+        print("  [5] Salir (cierra el caso)")
+        opcion = input("Opción: ").strip()
 
-        if eleccion == "auditoria":
-            _ver_auditoria(db, caso_id)
-            ui.pausar()
-            continue
-
-        if eleccion == "cese":
-            cesado = _ejecutar_cese(db, dispositivo, username)
-            ui.pausar()
-            if cesado:
-                return  # el dispositivo ya no admite mas acciones, volver a elegir otro
-            continue
-
-        if eleccion == "consola":
-            modo_consola(db, caso_id, dispositivo, username)
-            continue
-
-        # Es una herramienta de la lista numerada
-        for codigo, _, fn in _HERRAMIENTAS:
-            if codigo == eleccion:
-                _ejecutar_herramienta(db, caso_id, dispositivo, username, codigo, fn)
-                ui.pausar()
-                break
+        if opcion == "1":
+            _menu_redes(db, caso)
+        elif opcion == "2":
+            _menu_objetivos(db, caso)
+        elif opcion == "3":
+            _consola_libre(db, caso)
+            _pausar()
+        elif opcion == "4":
+            _mostrar_auditoria(db, caso)
+            _pausar()
+        elif opcion == "5":
+            return
+        else:
+            print("[!] Opción no válida.")

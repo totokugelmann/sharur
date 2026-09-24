@@ -11,12 +11,11 @@ Dispositivo (ver orden.py, dispositivo.py).
 
 import enum
 
-from sqlalchemy import Enum, ForeignKey, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.utils import utc_now
 from app.models.base import Base
-from sqlalchemy import DateTime
 
 
 class EstadoCaso(str, enum.Enum):
@@ -33,6 +32,7 @@ class Caso(Base):
 
     # Identificacion de la causa judicial
     numero_causa: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    numero_oficio: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     caratula: Mapped[str] = mapped_column(String(512))
     juzgado_interviniente: Mapped[str] = mapped_column(String(256))
     fiscalia_interviniente: Mapped[str] = mapped_column(String(256), nullable=True)
@@ -60,8 +60,3 @@ class Caso(Base):
         back_populates="caso", cascade="all, delete-orphan"
     )
 
-    # Nota: las relaciones usan forward refs (strings). Todos los modelos
-    # se registran de forma centralizada en app/models/__init__.py para
-    # que SQLAlchemy pueda resolverlas sin imports circulares aca.
-# después de numero_causa
-numero_oficio: Mapped[str] = mapped_column(String(128), unique=True, index=True)

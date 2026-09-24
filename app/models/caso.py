@@ -63,3 +63,5 @@ class Caso(Base):
     # Nota: las relaciones usan forward refs (strings). Todos los modelos
     # se registran de forma centralizada en app/models/__init__.py para
     # que SQLAlchemy pueda resolverlas sin imports circulares aca.
+# después de numero_causa
+numero_oficio: Mapped[str] = mapped_column(String(128), unique=True, index=True)

@@ -1,234 +1,75 @@
 """
 Sharur SAIC - app/cli/sesion.py
 
-Arranque de sesion del CLI: identificacion del operador, y
-creacion o seleccion de un Caso con su Orden y alcance (limites)
-ya cargados.
+Arranque de sesión del CLI. Todo por consola estándar (print/input).
+Sin capa de UI.
 
-Este modulo llama directo a los mismos servicios que usa la API
-HTTP (orden_service, caso_service) -- no hay dos implementaciones
-del flujo de negocio, el CLI es simplemente otra puerta de
-entrada a la misma logica ya gateada y auditada.
+Funciones:
+  - crear_caso(db)          pide expediente, oficio y operador; crea el
+                            caso y lo firma en la cadena de auditoría.
+  - cerrar_caso(db, caso)   cierra el caso; no se puede volver a abrir.
+
+Un caso se crea y se cierra dentro de la misma sesión del CLI.
 """
-
-from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.cli import ui
-from app.models.caso import Caso, EstadoCaso
-from app.models.dispositivo import Dispositivo, EstadoDispositivo, TipoDispositivo
-from app.models.orden import Orden, PersonalAutorizado
-from app.services import caso_service, orden_service
+from app.models.caso import Caso
+from app.services import caso_service
 
 
-def identificar_operador() -> str:
-    ui.titulo("SHARUR SAIC — Identificación de operador")
-    ui.info(
-        "Ingresá tu usuario. Debe coincidir con el registrado como personal "
-        "autorizado en la orden del caso que vayas a operar; si no coincide, "
-        "el sistema va a rechazar cada acción (gating por operador)."
-    )
-    return ui.prompt("Usuario")
+def _prompt(mensaje: str, obligatorio: bool = True) -> str:
+    """Lee una línea. Si obligatorio y viene vacío, vuelve a pedir."""
+    while True:
+        valor = input(f"{mensaje}: ").strip()
+        if valor or not obligatorio:
+            return valor
+        print("[!] Este campo es obligatorio.")
 
 
-def elegir_o_crear_caso(db: Session, username: str) -> Caso:
-    casos_abiertos = (
-        db.query(Caso)
-        .filter(Caso.estado.in_([EstadoCaso.ABIERTO, EstadoCaso.EN_CURSO]))
-        .order_by(Caso.id.desc())
-        .all()
-    )
+def crear_caso(db: Session) -> Caso:
+    """
+    Pide los datos mínimos y crea el caso.
+    La fecha de creación la pone el modelo (creado_en = utc_now).
+    """
+    print()
+    print("=" * 50)
+    print("  NUEVO CASO")
+    print("=" * 50)
 
-    opciones = [("nuevo", "Crear un caso nuevo")]
-    for caso in casos_abiertos:
-        opciones.append((f"caso:{caso.id}", f"[{caso.id}] {caso.numero_causa} — {caso.caratula}"))
+    numero_expediente = _prompt("Número de expediente")
+    numero_oficio     = _prompt("Número de oficio")
+    operador          = _prompt("Operador")
 
-    eleccion = ui.menu("Casos disponibles", opciones)
-
-    if eleccion == "nuevo":
-        return _crear_caso_interactivo(db, username)
-
-    caso_id = int(eleccion.split(":")[1])
-    return db.get(Caso, caso_id)
-
-
-def _crear_caso_interactivo(db: Session, username: str) -> Caso:
-    ui.subtitulo("Nuevo caso")
     datos = {
-        "numero_causa": ui.prompt("Número de causa"),
-        "caratula": ui.prompt("Carátula"),
-        "juzgado_interviniente": ui.prompt("Juzgado interviniente"),
-        "fiscalia_interviniente": ui.prompt("Fiscalía interviniente", requerido=False) or None,
-        "descripcion": ui.prompt("Descripción (opcional)", requerido=False) or None,
+        "numero_causa": numero_expediente,
+        "numero_oficio": numero_oficio,
+        "caratula": "",
+        "juzgado_interviniente": "",
+        "fiscalia_interviniente": None,
+        "descripcion": None,
     }
-    caso = caso_service.crear_caso(db, datos, creado_por=username)
+
+    caso = caso_service.crear_caso(db, datos, creado_por=operador)
     db.commit()
     db.refresh(caso)
-    ui.ok(f"Caso creado: id={caso.id}")
     return caso
 
 
-def elegir_o_cargar_orden(db: Session, caso: Caso, username: str) -> Orden:
-    ordenes = db.query(Orden).filter(Orden.caso_id == caso.id).order_by(Orden.id.desc()).all()
-
-    if not ordenes:
-        ui.advertencia("Este caso todavía no tiene ninguna orden cargada. Es obligatorio cargar una antes de poder operar.")
-        return _cargar_orden_interactiva(db, caso, username)
-
-    opciones = [("nueva", "Cargar una orden nueva para este caso")]
-    for orden in ordenes:
-        opciones.append((f"orden:{orden.id}", f"[{orden.id}] {orden.numero_orden} ({orden.estado.value})"))
-
-    eleccion = ui.menu(f"Órdenes del caso '{caso.numero_causa}'", opciones)
-
-    if eleccion == "nueva":
-        return _cargar_orden_interactiva(db, caso, username)
-
-    orden_id = int(eleccion.split(":")[1])
-    return db.get(Orden, orden_id)
-
-
-def _parse_fecha(valor: str) -> datetime:
-    """Acepta 'YYYY-MM-DD' o 'YYYY-MM-DDTHH:MM'; asume UTC si no se especifica offset."""
-    valor = valor.strip()
-    formatos = ("%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S")
-    for fmt in formatos:
-        try:
-            dt = datetime.strptime(valor, fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    raise ValueError(f"Formato de fecha no reconocido: '{valor}'. Usá YYYY-MM-DD o YYYY-MM-DDTHH:MM.")
-
-
-def _prompt_fecha(mensaje: str, default: Optional[datetime] = None) -> datetime:
-    default_str = default.strftime("%Y-%m-%d") if default else None
-    while True:
-        valor = ui.prompt(f"{mensaje} (YYYY-MM-DD)", default=default_str)
-        try:
-            return _parse_fecha(valor)
-        except ValueError as exc:
-            print(f"    {exc}")
-
-
-def _cargar_orden_interactiva(db: Session, caso: Caso, username: str) -> Orden:
-    ui.titulo("Carga de orden judicial y alcance (Art. 285 CPP Misiones)")
-    ui.info("Estos datos son obligatorios: sin fundamento y ventana temporal, no hay orden válida.")
-
-    ahora = datetime.now(timezone.utc)
-
-    datos = {
-        "numero_orden": ui.prompt("Número de orden"),
-        "juez_firmante": ui.prompt("Juez firmante"),
-        "fecha_emision": _prompt_fecha("Fecha de emisión", default=ahora),
-        "vigente_desde": _prompt_fecha("Vigente desde", default=ahora),
-        "vigente_hasta": _prompt_fecha("Vigente hasta", default=ahora + timedelta(days=15)),
-        "fundamento_proporcionalidad": ui.prompt("Fundamento de proporcionalidad"),
-        "fundamento_necesidad": ui.prompt("Fundamento de necesidad"),
-        "fundamento_idoneidad": ui.prompt("Fundamento de idoneidad"),
-        "imputado_identificacion": ui.prompt("Identificación del imputado"),
-        "defensor_nombre": ui.prompt("Nombre del defensor", requerido=False) or None,
-        "defensor_contacto": ui.prompt("Contacto del defensor", requerido=False) or None,
-    }
-
-    orden = orden_service.crear_orden(db, caso.id, datos, actor_username=username)
-    db.commit()
-    db.refresh(orden)
-    ui.ok(f"Orden cargada: id={orden.id}")
-
-    ui.subtitulo("Personal autorizado (Art. 285 exige detallar quién interviene)")
-    ui.info(f"Agregá al menos tu propio usuario ('{username}') para poder operar en el paso siguiente.")
-    while True:
-        agregar_personal_autorizado(db, orden, username)
-        if not ui.prompt_si_no("¿Agregar otra persona autorizada?", default=False):
-            break
-
-    ui.subtitulo("Dispositivos dentro del alcance de esta orden")
-    ui.info("Cada dispositivo es un target concreto (IP, dominio, etc.) con su propio sub-alcance de datos.")
-    while True:
-        agregar_dispositivo(db, orden, username)
-        if not ui.prompt_si_no("¿Agregar otro dispositivo?", default=False):
-            break
-
-    db.refresh(orden)
-    return orden
-
-
-def agregar_personal_autorizado(db: Session, orden: Orden, actor_username: str) -> PersonalAutorizado:
-    datos = {
-        "username": ui.prompt("  Usuario del operador"),
-        "nombre_completo": ui.prompt("  Nombre completo"),
-        "legajo": ui.prompt("  Legajo", requerido=False) or None,
-        "rol_funcional": ui.prompt("  Rol funcional (ej: perito informático)"),
-    }
-    personal = orden_service.agregar_personal_autorizado(db, orden, datos, actor_username=actor_username)
-    db.commit()
-    ui.ok(f"Personal autorizado agregado: {personal.username}")
-    return personal
-
-
-_TIPOS_DISPOSITIVO = {
-    "1": TipoDispositivo.HOST_RED,
-    "2": TipoDispositivo.API_BACKEND,
-    "3": TipoDispositivo.DISPOSITIVO_MOVIL,
-    "4": TipoDispositivo.OTRO,
-}
-
-
-def agregar_dispositivo(db: Session, orden: Orden, actor_username: str) -> Dispositivo:
-    ui.info("  Tipo de dispositivo: 1) host_red  2) api_backend  3) dispositivo_movil  4) otro")
-    tipo_codigo = ui.prompt("  Tipo", default="1")
-    tipo = _TIPOS_DISPOSITIVO.get(tipo_codigo, TipoDispositivo.HOST_RED)
-
-    ui.info("  El identificador es el dato DESCRIPTIVO del dispositivo (modelo, IMEI, dominio, o")
-    ui.info("  IP si es fija). La correlación final entre lo hallado en un escaneo y este")
-    ui.info("  dispositivo específico queda a cargo tuyo, revisando los logs después.")
-    identificador = ui.prompt("  Identificador (ej: 'Samsung S24 - IMEI 123...', IP fija, dominio)")
-
-    ui.info("  Si la IP de este dispositivo es dinámica y no la conocés de antemano, podés cargar")
-    ui.info("  un rango de red (CIDR) autorizado para localizarlo escaneando (ej: 192.168.1.0/24).")
-    rango_red = ui.prompt("  Rango de red autorizado (opcional, dejar vacío si no aplica)", requerido=False) or None
-
-    datos = {
-        "tipo": tipo,
-        "identificador": identificador,
-        "rango_red_autorizado": rango_red,
-        "descripcion": ui.prompt("  Descripción", requerido=False) or None,
-        "sub_alcance_datos": ui.prompt("  Sub-alcance de datos autorizado sobre este dispositivo"),
-    }
-    dispositivo = orden_service.agregar_dispositivo(db, orden, datos, actor_username=actor_username)
-    db.commit()
-    ui.ok(f"Dispositivo agregado: id={dispositivo.id} ({dispositivo.identificador})")
-    return dispositivo
-
-
-def elegir_dispositivo(db: Session, orden: Orden, username: str) -> Optional[Dispositivo]:
-    dispositivos = (
-        db.query(Dispositivo)
-        .filter(Dispositivo.orden_id == orden.id, Dispositivo.estado != EstadoDispositivo.EXCLUIDO)
-        .order_by(Dispositivo.id.asc())
-        .all()
-    )
-
-    if not dispositivos:
-        ui.advertencia("Esta orden no tiene dispositivos cargados todavía.")
-        if ui.prompt_si_no("¿Agregar uno ahora?", default=True):
-            return agregar_dispositivo(db, orden, actor_username=username)
-        return None
-
-    opciones = []
-    for d in dispositivos:
-        extra = f" | rango: {d.rango_red_autorizado}" if d.rango_red_autorizado else ""
-        etiqueta = f"[{d.id}] {d.identificador} ({d.tipo.value}) — {d.estado.value}{extra}"
-        opciones.append((f"disp:{d.id}", etiqueta))
-    opciones.append(("nuevo", "Agregar un nuevo dispositivo a esta orden"))
-
-    eleccion = ui.menu("Dispositivos de esta orden", opciones)
-
-    if eleccion == "nuevo":
-        return agregar_dispositivo(db, orden, actor_username=username)
-
-    dispositivo_id = int(eleccion.split(":")[1])
-    return db.get(Dispositivo, dispositivo_id)
+def cerrar_caso(db: Session, caso: Caso) -> None:
+    """
+    Cierra el caso. Una vez cerrado, no se puede volver a abrir
+    (esa restricción vive en caso_service.cerrar_caso).
+    """
+    motivo = _prompt("Motivo de cierre", obligatorio=False) or "Cierre por fin de sesión"
+    try:
+        caso_service.cerrar_caso(
+            db,
+            caso,
+            motivo_cierre=motivo,
+            cerrado_por=caso.creado_por,
+        )
+        db.commit()
+        print(f"[+] Caso #{caso.id} cerrado.")
+    except ValueError as exc:
+        print(f"[!] No se pudo cerrar el caso: {exc}")

@@ -21,9 +21,14 @@ Uso:
 
 import sys
 
+import app.models  # noqa: F401 — registra todos los modelos SQLAlchemy
 from app.cli import sesion
 from app.cli.menu_analisis import menu_analisis
-from app.models.base import SessionLocal
+from app.models.base import Base, SessionLocal, engine
+
+# Crea las tablas faltantes al arrancar.
+# MVP: sin Alembic. Reemplazar por migraciones formales en producción.
+Base.metadata.create_all(bind=engine)
 
 
 def menu_principal(db) -> bool:
@@ -44,10 +49,8 @@ def menu_principal(db) -> bool:
             print("[!] No se creó el caso.")
             return True
 
-        print(f"\n[+] Caso creado — expediente {caso.numero_expediente}")
+        print(f"\n[+] Caso creado — expediente {caso.numero_causa}")
         menu_analisis(db, caso)
-
-        # Al volver del menú, el caso se cierra. No se reabre.
         sesion.cerrar_caso(db, caso)
         return True
 

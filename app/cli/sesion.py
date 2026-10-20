@@ -27,10 +27,11 @@ def _prompt(mensaje: str, obligatorio: bool = True) -> str:
         print("[!] Este campo es obligatorio.")
 
 
-def crear_caso(db: Session) -> Caso:
+def crear_caso(db: Session) -> Caso | None:
     """
     Pide los datos mínimos y crea el caso.
     La fecha de creación la pone el modelo (creado_en = utc_now).
+    Devuelve None si hay un error de duplicidad (expediente u oficio).
     """
     print()
     print("=" * 50)
@@ -50,10 +51,14 @@ def crear_caso(db: Session) -> Caso:
         "descripcion": None,
     }
 
-    caso = caso_service.crear_caso(db, datos, creado_por=operador)
-    db.commit()
-    db.refresh(caso)
-    return caso
+    try:
+        caso = caso_service.crear_caso(db, datos, creado_por=operador)
+        db.commit()
+        db.refresh(caso)
+        return caso
+    except ValueError as exc:
+        print(f"\n[!] Error: {exc}")
+        return None
 
 
 def cerrar_caso(db: Session, caso: Caso) -> None:

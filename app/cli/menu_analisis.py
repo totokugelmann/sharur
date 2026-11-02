@@ -21,7 +21,7 @@ intermedio de auditoria_service (hash encadenado por caso).
 """
 
 from sqlalchemy.orm import Session
-
+from app.services import tools_service
 from app.models.caso import Caso
 
 
@@ -125,50 +125,63 @@ def _nmap_objetivos(db: Session, caso: Caso) -> None:
 # ─────────────────────────────────────────────
 
 def _ejecutar_nmap(db: Session, caso: Caso, target: str,
-                   perfil_nombre: str, perfil_flags: str, categoria: str) -> None:
+                   perfil_nombre: str, categoria: str) -> None:
     """
-    Punto de integración con tools_service.
-    En el MVP todavía NO se invoca: tools_service.run_nmap requiere
-    dispositivo_id, y en este flujo todavía no se cargan dispositivos.
-    Cuando adaptemos tools_service a la firma del MVP, aquí va la llamada:
+    Invoca tools_service.run_nmap con el perfil indicado y
+    muestra el resultado.
+    """
+    print()
+    print(f"[*] Ejecutando nmap (perfil: {perfil_nombre}) contra {target}...")
+    print("    Esto puede tardar unos segundos...")
 
+    try:
         resultado = tools_service.run_nmap(
-            db, caso_id=caso.id, dispositivo_id=None,
-            username=caso.creado_por, target=target, profile=perfil_nombre,
+            db,
+            caso_id=caso.id,
+            username=caso.creado_por,
+            target=target,
+            profile=perfil_nombre,
         )
         db.commit()
-        _mostrar_resultado(resultado)
-    """
-    print()
-    print("[i] Escaneo solicitado:")
-    print(f"    categoría : {categoria}")
-    print(f"    target    : {target}")
-    print(f"    perfil    : {perfil_nombre} ({perfil_flags})")
-    print()
-    print("[!] Pendiente: integrar tools_service.run_nmap (sin dispositivo).")
-    print("    Cuando esté cableado, la salida se firmará con SHA-256 y")
-    print("    se registrará como evidencia en la cadena de auditoría.")
-    _ofrecer_analisis_ia(caso, target, categoria)
+
+        # Mostrar resultado
+        print()
+        print("=" * 60)
+        print(f"  RESULTADO: nmap ({resultado.status})")
+        print("=" * 60)
+        if resultado.status == "not_found":
+            print(f"[!] {resultado.stderr}")
+            return
+
+        # Imprimir salida (limitada para no saturar la consola)
+        salida = resultado.output
+        if len(salida) > 5000:
+            print(salida[:5000])
+            print(f"\n[... salida truncada. Total: {len(salida)} caracteres ...]")
+        else:
+            print(salida or "(sin salida)")
+
+        if resultado.stderr:
+            print(f"\n[!] stderr: {resultado.stderr[:500]}")
+
+        print(f"\n[i] Duración: {resultado.duration_seconds:.2f}s")
+        print(f"[i] Hash de evidencia: {resultado.evidence_hash[:16]}...")
+
+        _ofrecer_analisis_ia(caso, target, categoria)
+
+    except Exception as exc:
+        print(f"\n[!] Error al ejecutar nmap: {exc}")
 
 
 def _ofrecer_analisis_ia(caso: Caso, target: str, categoria: str) -> None:
     """
-    Módulo IA (analisis_ia_service). En el MVP todavía no está cableado.
-    Cuando se active:
-      - corre en paralelo a la consola consumiendo el stdout de cada herramienta
-      - consulta el LLM local (Ollama + sharur-qwen, ver Modelfile)
-      - verifica cada CVE sugerida contra NVD (cve_search_service)
-      - registra hallazgos verificados en la cadena de auditoría con hash
-
-    Nota de diseño (evidence-first): el LLM propone, NVD valida, el operador
-    acepta. Ningún hallazgo se firma sin pasar por NVD. Esto es no-negociable
-    para que el hallazgo sea defendible como prueba.
+    Punto de integración con el módulo de IA (analisis_ia_service).
+    Por ahora, solo informa que está pendiente.
     """
     print()
     print("[i] Análisis IA (Ollama + NVD): pendiente de integración en el MVP.")
     print("    Cuando se active, esta evidencia se enviará al LLM local y los")
     print("    CVEs sugeridos se verificarán contra NVD antes de firmarse.")
-
 
 # ─────────────────────────────────────────────
 # Consola libre

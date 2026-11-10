@@ -160,3 +160,21 @@ def run_nmap(
     command = ["nmap", *flags, target]
     timeout = 600 if "completo" in profile else 300
     return _ejecutar_auditada(db, caso_id, username, "nmap", command, timeout)
+
+def run_arp_scan(db: Session, caso_id: int, username: str, target: str) -> ToolResult:
+    """
+    Ejecuta arp-scan contra el rango indicado. 
+    Es mucho más rápido que nmap para descubrir hosts en la red local
+    y devuelve el fabricante de la tarjeta de red (MAC).
+    """
+    command = ["arp-scan", target]
+    return _ejecutar_auditada(db, caso_id, username, "arp-scan", command, 120)
+
+
+def run_netdiscover(db: Session, caso_id: int, username: str, target: str) -> ToolResult:
+    """
+    Ejecuta netdiscover en modo rápido (-r). 
+    Es ideal para descubrir hosts de forma pasiva/activa sin hacer ruido.
+    """
+    command = ["netdiscover", "-r", target, "-P"]
+    return _ejecutar_auditada(db, caso_id, username, "netdiscover", command, 120)

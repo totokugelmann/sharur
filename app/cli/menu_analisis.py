@@ -3,13 +3,6 @@ Sharur SAIC - app/cli/menu_analisis.py
 
 Menú principal de análisis. Todo por consola estándar (print/input).
 Sin capa de UI.
-
-Estructura:
-  [1] Detectar hosts en Red Local (nmap, arp-scan, netdiscover)
-  [2] Objetivos (Escanear puertos/servicios)
-  [3] Consola libre
-  [4] Ver auditoría del caso
-  [5] Salir (cierra el caso)
 """
 
 import socket
@@ -30,10 +23,8 @@ def _pausar() -> None:
 
 
 def _get_local_ip() -> str:
-    """Obtiene la IP local de la máquina (la que usa para salir a internet)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # No se conecta realmente, solo le pide al SO que elija la interfaz
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
@@ -42,10 +33,6 @@ def _get_local_ip() -> str:
         s.close()
     return ip
 
-
-# ─────────────────────────────────────────────
-# Auditoría
-# ─────────────────────────────────────────────
 
 def _mostrar_auditoria(db: Session, caso: Caso) -> None:
     from app.models.auditoria import EventoAuditoria
@@ -69,17 +56,12 @@ def _mostrar_auditoria(db: Session, caso: Caso) -> None:
         print(f"  [{e.secuencia:04d}] {e.tipo_evento.value:<22} {actor:<15} {e.descripcion[:60]}")
 
 
-# ─────────────────────────────────────────────
-# Detección de Red Local (Descubrimiento)
-# ─────────────────────────────────────────────
-
 def _menu_deteccion_hosts(db: Session, caso: Caso) -> None:
     ip_local = _get_local_ip()
     
     if ip_local.startswith("127."):
         target = "127.0.0.1"
     else:
-        # Toma la IP y le pone /24 (ej: 192.168.1.0/24)
         base_ip = ".".join(ip_local.split(".")[:3])
         target = f"{base_ip}.0/24"
 
@@ -90,37 +72,44 @@ def _menu_deteccion_hosts(db: Session, caso: Caso) -> None:
         print("=" * 60)
         print(f"  Tu IP: {ip_local} | Red detectada: {target}")
         print("  Seleccioná la herramienta de descubrimiento:")
-        print("  [1] nmap (-sn)        — Ping scan estándar")
-        print("  [2] arp-scan          — Rápido, obtiene MAC y Fabricante")
-        print("  [3] netdiscover       — Pasivo/Activo, sin hacer ruido")
-        print("  [4] Volver al menú principal")
+        print("  [1] nmap (-sn)        — Ping scan (rápido, falla en WiFi con aislamiento)")
+        print("  [2] nmap (agresivo)   — TCP SYN Scan (atraviesa aislamiento WiFi, más lento)")
+        print("  [3] arp-scan          — Solo Capa 2 (muy rápido)")
+        print("  [4] netdiscover       — Solo Capa 2 (muy rápido)")
+        print("  [5] Volver al menú principal")
         
         opcion = input("\nOpción: ").strip()
 
-        if opcion == "4":
+        if opcion == "5":
             return
 
-        if opcion not in ["1", "2", "3"]:
+        if opcion not in ["1", "2", "3", "4"]:
             print("[!] Opción no válida.")
             continue
 
         herramienta = ""
-        print(f"\n[*] Ejecutando detección con {opcion} en {target}...")
-	print("    Esto puede tardar unos segundos...")
+        print(f"\n[*] Ejecutando detección en {target}...")
+        print("    Esto puede tardar unos segundos...")
 
         try:
             if opcion == "1":
-                herramienta = "nmap"
+                herramienta = "nmap (ping)"
                 resultado = tools_service.run_nmap(
                     db, caso_id=caso.id, username=caso.creado_por, 
                     target=target, profile="red_descubrimiento"
                 )
             elif opcion == "2":
+                herramienta = "nmap (agresivo)"
+                resultado = tools_service.run_nmap(
+                    db, caso_id=caso.id, username=caso.creado_por, 
+                    target=target, profile="red_agresivo"
+                )
+            elif opcion == "3":
                 herramienta = "arp-scan"
                 resultado = tools_service.run_arp_scan(
                     db, caso_id=caso.id, username=caso.creado_por, target=target
                 )
-            elif opcion == "3":
+            elif opcion == "4":
                 herramienta = "netdiscover"
                 resultado = tools_service.run_netdiscover(
                     db, caso_id=caso.id, username=caso.creado_por, target=target
@@ -141,21 +130,24 @@ def _menu_deteccion_hosts(db: Session, caso: Caso) -> None:
                 if "root" in resultado.stderr.lower() or "permiso" in resultado.stderr.lower():
                     print("[!] TIP: Ejecutá 'sudo python sharur_cli.py' para obtener permisos.")
             else:
+                # Advertencia si solo encontró 1 host (la propia VM)
+                if "1 host up" in resultado.output or "0 responded" in resultado.output:
+                    print("[!] ATENCIÓN: La herramienta no encontró otros hosts.")
+                    print("    Tu red parece tener 'Aislamiento de Cliente' (AP Isolation).")
+                    print("    ==> PROBÁ CON LA OPCIÓN [2] nmap (agresivo) para forzar el escaneo TCP.")
+                    print()
+                
                 print(resultado.output or "(sin salida)")
                 print(f"\n[i] Duración: {resultado.duration_seconds:.2f}s")
                 print(f"[i] Hash de evidencia: {resultado.evidence_hash[:16]}...")
-                print("\n[i] TIP: Copiá la IP de alguno de los dispositivos de arriba")
-                print("    y usala en la opción [2] Objetivos para escanear sus puertos.")
+                
+                _ofrecer_analisis_ia(db, caso, target, "redes", resultado)
 
         except Exception as exc:
             print(f"\n[!] Error inesperado: {exc}")
 
         _pausar()
 
-
-# ─────────────────────────────────────────────
-# Objetivos (Escaneo de puertos/servicios)
-# ─────────────────────────────────────────────
 
 _PERFILES_OBJETIVO = {
     "1": ("obj_default",  "-sV -sC --top-ports 1000", "Balance estándar"),
@@ -212,33 +204,57 @@ def _ejecutar_nmap_objetivo(db: Session, caso: Caso, target: str, perfil_nombre:
         print(f"\n[i] Duración: {resultado.duration_seconds:.2f}s")
         print(f"[i] Hash de evidencia: {resultado.evidence_hash[:16]}...")
 
-        _ofrecer_analisis_ia(caso, target, "objetivos")
+        _ofrecer_analisis_ia(db, caso, target, "objetivos", resultado)
 
     except Exception as exc:
         print(f"\n[!] Error al ejecutar nmap: {exc}")
 
 
-def _ofrecer_analisis_ia(caso: Caso, target: str, categoria: str) -> None:
+def _ofrecer_analisis_ia(db: Session, caso: Caso, target: str, categoria: str, resultado_tool) -> None:
+    from app.services import analisis_ia_service
+    
     print()
-    print("[i] Análisis IA (Ollama + NVD): pendiente de integración en el MVP.")
-    print("    Cuando se active, esta evidencia se enviará al LLM local y los")
-    print("    CVEs sugeridos se verificarán contra NVD antes de firmarse.")
+    respuesta = input("¿Enviar esta evidencia al modelo de IA para buscar vulnerabilidades? (s/n) [s]: ").strip().lower()
+    if respuesta == "n":
+        return
 
+    print("\n[*] Consultando al modelo local (Ollama) y verificando CVEs contra NVD...")
+    print("    Esto puede tardar varios segundos dependiendo de tu hardware...")
 
-# ─────────────────────────────────────────────
-# Consola libre
-# ─────────────────────────────────────────────
+    try:
+        hallazgos = analisis_ia_service.analizar_evidencia(
+            db,
+            caso_id=caso.id,
+            username=caso.creado_por,
+            herramienta=resultado_tool.tool,
+            resultado_tool=resultado_tool
+        )
+        db.commit()
+    except Exception as exc:
+        print(f"\n[!] Error en el análisis IA: {exc}")
+        print("    Asegurate de tener Ollama corriendo y el modelo 'sharur-qwen' descargado.")
+        return
+
+    if not hallazgos:
+        print("\n[i] El modelo no propuso ningún hallazgo verificable sobre esta evidencia.")
+        return
+
+    print("\n" + "=" * 60)
+    print("  RESULTADOS DEL ANÁLISIS DE IA")
+    print("=" * 60)
+    for h in hallazgos:
+        print(f"  [{'X' if h.confianza.value == 'descartada' else '✓'}] {h.titulo}")
+        print(f"      CVE: {h.cve_id or 'N/A'} | Severidad: {h.severidad.value.upper()} | Confianza: {h.confianza.value}")
+        if h.nvd_verificado:
+            print(f"      [Validado en NVD - CVSS: {h.nvd_score}]")
+        print(f"      Cita: \"{h.cita_evidencia[:80]}...\"")
+        print("-" * 60)
+
 
 def _consola_libre(db: Session, caso: Caso) -> None:
     print()
     print("[i] Consola libre: pendiente de integración (consola_service).")
-    print("    Cuando se active, cada comando se validará contra la allow-list")
-    print("    de binarios y quedará firmado en la cadena de auditoría.")
 
-
-# ─────────────────────────────────────────────
-# Menú Principal
-# ─────────────────────────────────────────────
 
 def menu_analisis(db: Session, caso: Caso) -> None:
     while True:

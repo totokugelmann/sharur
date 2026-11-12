@@ -2,8 +2,7 @@
 Sharur SAIC - app/services/tools_service.py
 
 Ejecucion de herramientas automatizadas de reconocimiento.
-En esta fase MVP no hay gating por dispositivo; cada ejecucion
-se audita a nivel de caso y se firma con SHA-256.
+Adaptado para operar a nivel de Caso (sin dispositivo_id obligatorio).
 """
 
 import shlex
@@ -89,8 +88,8 @@ def _run_tool(command: List[str], tool_name: str, timeout: int = 120) -> ToolRes
 NMAP_PROFILES = {
     # Perfiles para escaneo de redes (descubrimiento)
     "red_descubrimiento": ["-sn"],
-    "red_top_puertos": ["-sV", "--top-ports", "100", "-T4"],
-    "red_completo": ["-sV", "-p-", "-T3"],
+    "red_agresivo": ["-Pn", "-PS22,80,443,445,3389", "-T4", "--max-retries", "1"],
+    
     # Perfiles para escaneo de objetivos (puertos/servicios)
     "obj_default": ["-sV", "-sC", "--top-ports", "1000", "-T4"],
     "obj_rapido": ["-sV", "-F", "-T4"],
@@ -145,36 +144,17 @@ def run_nmap(
     target: str,
     profile: str = "obj_default",
 ) -> ToolResult:
-    """
-    Ejecuta nmap sobre un target con el perfil especificado.
-    Los perfiles válidos son:
-      - red_descubrimiento
-      - red_top_puertos
-      - red_completo
-      - obj_default
-      - obj_rapido
-      - obj_completo
-      - obj_sigiloso
-    """
     flags = NMAP_PROFILES.get(profile, NMAP_PROFILES["obj_default"])
     command = ["nmap", *flags, target]
     timeout = 600 if "completo" in profile else 300
     return _ejecutar_auditada(db, caso_id, username, "nmap", command, timeout)
 
+
 def run_arp_scan(db: Session, caso_id: int, username: str, target: str) -> ToolResult:
-    """
-    Ejecuta arp-scan contra el rango indicado. 
-    Es mucho más rápido que nmap para descubrir hosts en la red local
-    y devuelve el fabricante de la tarjeta de red (MAC).
-    """
     command = ["arp-scan", target]
     return _ejecutar_auditada(db, caso_id, username, "arp-scan", command, 120)
 
 
 def run_netdiscover(db: Session, caso_id: int, username: str, target: str) -> ToolResult:
-    """
-    Ejecuta netdiscover en modo rápido (-r). 
-    Es ideal para descubrir hosts de forma pasiva/activa sin hacer ruido.
-    """
     command = ["netdiscover", "-r", target, "-P"]
     return _ejecutar_auditada(db, caso_id, username, "netdiscover", command, 120)

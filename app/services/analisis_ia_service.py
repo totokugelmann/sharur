@@ -1,32 +1,16 @@
 """
 Sharur SAIC - app/services/analisis_ia_service.py
 
-Orquestador del pipeline evidence-first completo:
-
-  herramienta (tools_service, ya gateada)
-      -> evidence blob
-      -> LLM propone hallazgos (llm_service)
-      -> por cada hallazgo propuesto:
-           a) se valida que la cita exista en la evidencia cruda
-              (llm_service.find_quote_source)
-           b) si el hallazgo trae CVE, se verifica contra NVD
-              (cve_search_service.verificar_cve_en_nvd)
-           c) se asigna confianza:
-                - CONFIRMADA: cita valida + CVE verificado en NVD
-                - PROBABLE: cita valida, CVE no verificable o sin CVE
-                - DESCARTADA: cita no encontrada en la evidencia
-      -> todo hallazgo (incluidos los DESCARTADOS) se persiste y
-         se audita, para que quede trazabilidad completa de que
-         se le propuso al modelo y por que se acepto o rechazo.
+Orquestador del pipeline evidence-first completo.
+Adaptado para funcionar a nivel de Caso (sin dispositivo_id obligatorio).
 """
 
 from typing import Optional
-
 from sqlalchemy.orm import Session
 
 from app.models.auditoria import TipoEvento
-from app.models.notificacion import ConfianzaHallazgo, Hallazgo, SeveridadHallazgo
-from app.services import auditoria_service, tools_service
+from app.models.hallazgo import ConfianzaHallazgo, Hallazgo, SeveridadHallazgo
+from app.services import auditoria_service
 from app.services.cve_search_service import is_cve, verificar_cve_en_nvd
 from app.services.llm_service import build_evidence_blob, find_quote_source, proponer_hallazgos
 
@@ -38,7 +22,6 @@ _MAPA_SEVERIDAD = {
     "informativa": SeveridadHallazgo.INFORMATIVA,
 }
 
-
 def _normalizar_severidad(valor: Optional[str]) -> SeveridadHallazgo:
     if not valor:
         return SeveridadHallazgo.INFORMATIVA
@@ -48,22 +31,15 @@ def _normalizar_severidad(valor: Optional[str]) -> SeveridadHallazgo:
 def analizar_evidencia(
     db: Session,
     caso_id: int,
-    dispositivo_id: int,
     username: str,
     herramienta: str,
     resultado_tool,
+    dispositivo_id: Optional[int] = None,
 ) -> list[Hallazgo]:
     """
-    Corre el pipeline evidence-first (LLM -> validacion de cita ->
-    verificacion NVD -> persistencia) sobre un ToolResult YA
-    OBTENIDO. Separado de `ejecutar_analisis_ia` para que un
-    llamador que ya corrio la herramienta (por ejemplo el CLI, que
-    deja al operador elegir objetivo/perfil de escaneo de forma
-    interactiva) no tenga que volver a ejecutarla desde cero solo
-    para analizarla.
+    Corre el pipeline evidence-first sobre un ToolResult YA OBTENIDO.
     """
     if resultado_tool.status not in ("ok", "error"):
-        # rechazado_gating, timeout, not_found: no tiene sentido mandarlo al LLM
         return []
 
     evidence_blob = build_evidence_blob(herramienta, resultado_tool.output)
@@ -78,8 +54,8 @@ def analizar_evidencia(
         detalle={"herramienta": herramienta, "evidencia_hash": resultado_tool.evidence_hash},
     )
 
+    # Llamamos al LLM
     propuestas = proponer_hallazgos(evidence_blob)
-
     hallazgos_persistidos: list[Hallazgo] = []
 
     for propuesta in propuestas:
@@ -155,36 +131,3 @@ def analizar_evidencia(
         )
 
     return hallazgos_persistidos
-
-
-def ejecutar_analisis_ia(
-    db: Session,
-    caso_id: int,
-    dispositivo_id: int,
-    username: str,
-    herramienta: str,
-    target: str,
-) -> list[Hallazgo]:
-    """
-    Corre una herramienta gateada, pasa su salida al LLM, valida
-    cada hallazgo propuesto contra la evidencia cruda y contra
-    NVD, y persiste todos los resultados (confirmados, probables
-    y descartados).
-
-    Usado por la API HTTP, donde no existe un ToolResult previo.
-    Si ya tenes uno (por ejemplo el CLI, tras dejar elegir objetivo/
-    perfil al operador), usa `analizar_evidencia` directamente para
-    no correr la herramienta dos veces.
-    """
-    if herramienta == "nmap":
-        resultado_tool = tools_service.run_nmap(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "httpx":
-        resultado_tool = tools_service.run_httpx(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "testssl":
-        resultado_tool = tools_service.run_testssl(db, caso_id, dispositivo_id, username, target)
-    elif herramienta == "nuclei":
-        resultado_tool = tools_service.run_nuclei_deteccion(db, caso_id, dispositivo_id, username, target)
-    else:
-        raise ValueError(f"Herramienta '{herramienta}' no soportada por el pipeline de analisis IA.")
-
-    return analizar_evidencia(db, caso_id, dispositivo_id, username, herramienta, resultado_tool)

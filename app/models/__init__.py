@@ -15,13 +15,9 @@ from app.models.caso import Caso, EstadoCaso  # noqa: F401
 from app.models.orden import Orden, EstadoOrden, PersonalAutorizado  # noqa: F401
 from app.models.dispositivo import Dispositivo, TipoDispositivo, EstadoDispositivo  # noqa: F401
 from app.models.auditoria import EventoAuditoria, TipoEvento  # noqa: F401
-from app.models.notificacion import (  # noqa: F401
-    Notificacion,
-    EstadoNotificacion,
-    Hallazgo,
-    SeveridadHallazgo,
-    ConfianzaHallazgo,
-)
+
+# Acá está el cambio:
+from app.models.hallazgo import Hallazgo, SeveridadHallazgo, ConfianzaHallazgo  # noqa: F401
 
 __all__ = [
     "Base",
@@ -35,8 +31,6 @@ __all__ = [
     "EstadoDispositivo",
     "EventoAuditoria",
     "TipoEvento",
-    "Notificacion",
-    "EstadoNotificacion",
     "Hallazgo",
     "SeveridadHallazgo",
     "ConfianzaHallazgo",

@@ -66,10 +66,12 @@ def ask_ollama(evidence_blob: str) -> Optional[str]:
             {"role": "user", "content": evidence_blob},
         ],
         "stream": False,
+        "format": "json",
     }
 
     try:
-        resp = requests.post(settings.OLLAMA_URL, json=payload, timeout=settings.OLLAMA_TIMEOUT)
+        # Aumentamos el timeout a 120 segundos solo para esta petición
+        resp = requests.post(settings.OLLAMA_URL, json=payload, timeout=120)
         resp.raise_for_status()
     except requests.RequestException as exc:
         logger.error("Fallo consultando Ollama: %s", exc)
@@ -86,11 +88,12 @@ def normalize_whitespace(text: str) -> str:
 def extract_json_object(text: str) -> Dict[str, Any]:
     """
     Extrae el primer objeto JSON valido de la respuesta del modelo,
-    tolerando que el modelo agregue texto extra pese a la
-    instruccion del system prompt.
+    limpiando bloques de markdown si los hubiera.
     """
     if not text:
         return {"hallazgos": []}
+
+    text = re.sub(r"```(?:json)?(.*?)```", r"\1", text, flags=re.DOTALL)
 
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
@@ -101,7 +104,6 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         logger.warning("Respuesta del modelo no parseable como JSON.")
         return {"hallazgos": []}
-
 
 def find_quote_source(quote: str, evidence_blob: str) -> bool:
     """

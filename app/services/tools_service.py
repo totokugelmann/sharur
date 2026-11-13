@@ -86,15 +86,17 @@ def _run_tool(command: List[str], tool_name: str, timeout: int = 120) -> ToolRes
 
 
 NMAP_PROFILES = {
-    # Perfiles para escaneo de redes (descubrimiento)
-    "red_descubrimiento": ["-sn"],
-    "red_agresivo": ["-Pn", "-PS22,80,443,445,3389", "-T4", "--max-retries", "1"],
+    # --- Perfiles de Descubrimiento (Redes) ---
+    "red_basico":    ["-sn"],
+    "red_rapido":    ["-sn", "-T4", "-n"],
+    "red_profundo":  ["-Pn", "-PS22,80,443,445,3389", "-T4", "--max-retries", "1"],
+    "red_sigiloso":  ["-sn", "-T2"],
     
-    # Perfiles para escaneo de objetivos (puertos/servicios)
-    "obj_default": ["-sV", "-sC", "--top-ports", "1000", "-T4"],
-    "obj_rapido": ["-sV", "-F", "-T4"],
-    "obj_completo": ["-sV", "-sC", "-p-", "-T3"],
-    "obj_sigiloso": ["-sS", "-T2", "--top-ports", "100"],
+    # --- Perfiles de Escaneo (Objetivos) ---
+    "obj_default":   ["-sV", "-sC", "--top-ports", "1000", "-T4"],
+    "obj_rapido":    ["-sV", "-F", "-T4"],
+    "obj_completo":  ["-sV", "-sC", "-p-", "-T3"],
+    "obj_sigiloso":  ["-sS", "-T2", "--top-ports", "100"],
 }
 
 

@@ -19,6 +19,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.logging import logger
 from app.core.security import sha256_of_file
 from app.core.utils import utc_now
 from app.models.auditoria import EventoAuditoria, TipoEvento
@@ -180,12 +181,26 @@ def exportar_informe(
 
     hash_archivo = sha256_of_file(ruta_final)
 
+    # El archivo ya esta en disco: registrar el evento es secundario. Si la
+    # base no conoce el tipo de evento (enum sin migrar) NO se pierde el
+    # informe ni se envenena la sesion: se revierte solo ese INSERT y se avisa.
+    auditado = False
     if registrar:
-        auditoria_service.registrar_evento(
-            db, caso_id=caso.id, tipo_evento=TipoEvento.INFORME_EXPORTADO,
-            descripcion=f"Informe exportado ({formato_final}).",
-            actor_username=caso.creado_por,
-            detalle={"archivo": os.path.basename(ruta_final), "hash_sha256": hash_archivo},
-        )
+        try:
+            auditoria_service.registrar_evento(
+                db, caso_id=caso.id, tipo_evento=TipoEvento.INFORME_EXPORTADO,
+                descripcion=f"Informe exportado ({formato_final}).",
+                actor_username=caso.creado_por,
+                detalle={"archivo": os.path.basename(ruta_final), "hash_sha256": hash_archivo},
+            )
+            auditado = True
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "No se pudo auditar la exportacion del informe (el archivo SI se genero): %s", exc
+            )
 
-    return {"ruta": ruta_final, "formato": formato_final, "hash_sha256": hash_archivo}
+    return {
+        "ruta": ruta_final, "formato": formato_final,
+        "hash_sha256": hash_archivo, "auditado": auditado,
+    }

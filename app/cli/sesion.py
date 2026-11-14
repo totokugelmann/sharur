@@ -89,4 +89,5 @@ def cerrar_caso(db: Session, caso: Caso) -> None:
             db.commit()
             print(f"[+] Informe: {res['ruta']}  (SHA-256: {res['hash_sha256']})")
         except Exception as exc:
+            db.rollback()
             print(f"[!] No se pudo exportar el informe: {exc}")

@@ -61,3 +61,21 @@ def test_pdf_cae_a_html_si_no_hay_motor(db):
     res = reporte_service.exportar_informe(db, caso, formato="pdf")
     db.commit()
     assert res["formato"] in ("pdf", "html")  # html si weasyprint no esta instalado
+
+
+def test_export_sigue_funcionando_si_falla_la_auditoria(db, monkeypatch):
+    """Enum sin migrar: el INSERT del evento falla, pero el informe se genera igual."""
+    caso = _caso(db)
+
+    def boom(*a, **k):
+        raise RuntimeError("invalid input value for enum tipoevento: INFORME_EXPORTADO")
+
+    monkeypatch.setattr(reporte_service.auditoria_service, "registrar_evento", boom)
+
+    res = reporte_service.exportar_informe(db, caso, formato="html")  # caso ABIERTO -> intenta auditar
+    assert res["auditado"] is False
+    assert len(res["hash_sha256"]) == 64
+    assert "EXP-9" in open(res["ruta"], encoding="utf-8").read()
+    # La sesion quedo utilizable (no envenenada): una consulta normal funciona.
+    from app.models.caso import Caso
+    assert db.query(Caso).count() == 1

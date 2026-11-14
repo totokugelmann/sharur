@@ -367,7 +367,10 @@ def _exportar_informe(db: Session, caso: Caso) -> None:
         db.commit()
         print(f"\n[+] Informe generado: {res['ruta']}")
         print(f"    Formato: {res['formato']} | SHA-256: {res['hash_sha256']}")
+        if not res.get("auditado", True):
+            print("    [i] El evento no se registró en la auditoría (ver logs); el informe es válido.")
     except Exception as exc:
+        db.rollback()
         print(f"\n[!] No se pudo exportar el informe: {exc}")
 
 

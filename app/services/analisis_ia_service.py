@@ -29,6 +29,13 @@ _MAPA_SEVERIDAD = {
 }
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}")
+_PUERTO_CITA_RE = re.compile(r"(\d{1,5})/(?:tcp|udp)")
+
+
+def _puerto_de_cita(cita: str) -> Optional[int]:
+    """Numero de puerto que encabeza una cita ('21/tcp open ...' -> 21), o None."""
+    m = _PUERTO_CITA_RE.search(cita or "")
+    return int(m.group(1)) if m else None
 
 def _normalizar_severidad(valor: Optional[str]) -> SeveridadHallazgo:
     if not valor:
@@ -129,6 +136,7 @@ def analizar_evidencia(
     )
     hallazgos: list[Hallazgo] = []
     cves_ya_registrados: set[str] = set()
+    puertos_confirmados: set[int] = set()  # puertos que ya tienen un CVE confirmado
     nvd_caida = False
 
     # ── Via 1: busqueda determinista por producto + version ──────────
@@ -144,10 +152,16 @@ def analizar_evidencia(
             if cve.cve_id in cves_ya_registrados:
                 continue
             cves_ya_registrados.add(cve.cve_id)
+            puertos_confirmados.add(pt.puerto)
+            # El CPE que disparo la coincidencia queda registrado para que el
+            # perito pueda auditar POR QUE NVD marco este CVE (cambio 1).
+            descripcion = f"[NVD] {cve.descripcion}"
+            if cve.cpe_coincidente:
+                descripcion += f"\n\n[NVD coincidencia CPE] {cve.cpe_coincidente}"
             hallazgos.append(_registrar_hallazgo(
                 db, cve_id=cve.cve_id,
                 titulo=f"{cve.cve_id} en {pt.producto} {pt.version} (puerto {pt.puerto}/{pt.protocolo})",
-                descripcion=f"[NVD] {cve.descripcion}",
+                descripcion=descripcion,
                 cita=pt.linea,
                 severidad=severidad_desde_cvss(cve.cvss_score, SeveridadHallazgo.MEDIA),
                 confianza=ConfianzaHallazgo.CONFIRMADA,
@@ -189,6 +203,10 @@ def analizar_evidencia(
                 if cve_id in cves_ya_registrados:
                     continue  # ya lo informo la via determinista
                 v = verificar_cve_en_nvd(cve_id)
+            elif _puerto_de_cita(cita) in puertos_confirmados:
+                # El puerto ya tiene un CVE confirmado: el "servicio expuesto"
+                # generico del LLM no agrega nada, se omite (cambio 3).
+                continue
                 if v.existe:
                     nvd_verificado, nvd_score = True, v.cvss_score
                     confianza = ConfianzaHallazgo.CONFIRMADA

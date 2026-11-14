@@ -92,3 +92,26 @@ def test_cache_evita_repetir_la_consulta(monkeypatch):
     nvd.buscar_cves_por_producto("vsftpd", "2.3.4")
     nvd.buscar_cves_por_producto("vsftpd", "2.3.4")
     assert len(n) == 1
+
+
+def test_descripcion_cpe_marca_rango_sin_cota_inferior():
+    sin_piso = {"criteria": "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*",
+                "versionEndExcluding": "2.4.63"}
+    txt = nvd.describir_coincidencia_cpe(sin_piso)
+    assert "SIN COTA INFERIOR" in txt and "< 2.4.63" in txt
+
+    con_piso = {"criteria": "cpe:2.3:a:openbsd:openssh:*:*:*:*:*:*:*:*",
+                "versionStartIncluding": "4.0", "versionEndExcluding": "7.2"}
+    txt2 = nvd.describir_coincidencia_cpe(con_piso)
+    assert "SIN COTA INFERIOR" not in txt2 and ">= 4.0" in txt2
+
+    exacta = {"criteria": "cpe:2.3:a:beasts:vsftpd:2.3.4:*:*:*:*:*:*:*"}
+    assert "versión exacta 2.3.4" in nvd.describir_coincidencia_cpe(exacta)
+
+
+def test_busqueda_adjunta_el_cpe_coincidente(monkeypatch):
+    data = {"vulnerabilities": [
+        _cve("CVE-2011-2523", "cpe:2.3:a:beasts:vsftpd:2.3.4:*:*:*:*:*:*:*", 9.8)]}
+    monkeypatch.setattr(nvd.requests, "get", lambda *a, **k: _Resp(200, data))
+    r = nvd.buscar_cves_por_producto("vsftpd", "2.3.4")
+    assert r.cves[0].cpe_coincidente and "vsftpd" in r.cves[0].cpe_coincidente

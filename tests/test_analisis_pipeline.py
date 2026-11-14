@@ -24,7 +24,7 @@ def entorno(monkeypatch):
 
     def fake_registrar(db, **kw):
         h = SimpleNamespace(**{k: kw[k] for k in (
-            "cve_id", "titulo", "cita", "confianza", "nvd_verificado", "severidad")})
+            "cve_id", "titulo", "cita", "descripcion", "confianza", "nvd_verificado", "severidad")})
         h.cita_evidencia = h.cita
         guardados.append(h)
         return h
@@ -33,6 +33,37 @@ def entorno(monkeypatch):
     monkeypatch.setattr(svc.auditoria_service, "registrar_evento", lambda *a, **k: None)
     tool = SimpleNamespace(status="ok", output=NMAP, command=["nmap"], evidence_hash="h")
     return guardados, tool
+
+
+def test_cpe_coincidente_queda_en_la_descripcion(monkeypatch, entorno):
+    guardados, tool = entorno
+    monkeypatch.setattr(svc, "buscar_cves_por_producto", lambda p, v: ResultadoBusquedaCVE(
+        ESTADO_VERIFICADO,
+        [CveEncontrado("CVE-2011-2523", "backdoor", 9.8, "CRITICAL",
+                       cpe_coincidente="cpe:2.3:a:beasts:vsftpd:2.3.4 (versión exacta)")]
+        if p == "vsftpd" else []))
+    monkeypatch.setattr(svc, "proponer_hallazgos", lambda blob: ([], False))
+    svc.analizar_evidencia(None, 1, "op", "nmap", tool)
+    confirmada = [h for h in guardados if h.confianza == ConfianzaHallazgo.CONFIRMADA][0]
+    assert "coincidencia CPE" in confirmada.descripcion and "vsftpd" in confirmada.descripcion
+
+
+def test_llm_generico_no_duplica_puerto_ya_confirmado(monkeypatch, entorno):
+    guardados, tool = entorno
+    monkeypatch.setattr(svc, "buscar_cves_por_producto", lambda p, v: ResultadoBusquedaCVE(
+        ESTADO_VERIFICADO,
+        [CveEncontrado("CVE-2011-2523", "backdoor", 9.8, "CRITICAL")] if p == "vsftpd" else []))
+    # El LLM propone un generico para el puerto 21 (ya confirmado) y otro para el 22.
+    monkeypatch.setattr(svc, "proponer_hallazgos", lambda blob: ([
+        {"titulo": "FTP expuesto", "descripcion": "d", "severidad_sugerida": "media",
+         "cita_evidencia": "21/tcp open  ftp     vsftpd 2.3.4"},
+        {"titulo": "SSH expuesto", "descripcion": "d", "severidad_sugerida": "baja",
+         "cita_evidencia": "22/tcp open  ssh     OpenSSH 4.7p1 Debian 8ubuntu1 (protocol 2.0)"},
+    ], False))
+    svc.analizar_evidencia(None, 1, "op", "nmap", tool)
+    titulos = [h.titulo for h in guardados]
+    assert "FTP expuesto" not in titulos      # omitido: el 21 ya tiene CVE confirmado
+    assert "SSH expuesto" in titulos          # conservado: el 22 no estaba confirmado
 
 
 def test_cve_confirmado_sin_que_el_llm_lo_mencione(monkeypatch, entorno):

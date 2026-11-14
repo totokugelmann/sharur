@@ -255,7 +255,8 @@ def _coincide_producto(producto: str, cpe_match: dict) -> bool:
     return any(n and n in prod_l for n in nombres)
 
 
-def _cve_afecta(cve_data: dict, producto: str, version: str) -> bool:
+def _cpe_coincidente(cve_data: dict, producto: str, version: str) -> Optional[dict]:
+    """Devuelve el primer cpeMatch de NVD que afecta a 'producto version', o None."""
     for conf in cve_data.get("configurations", []):
         for nodo in conf.get("nodes", []):
             for cm in nodo.get("cpeMatch", []):
@@ -264,8 +265,41 @@ def _cve_afecta(cve_data: dict, producto: str, version: str) -> bool:
                     and _coincide_producto(producto, cm)
                     and version_afectada(version, cm)
                 ):
-                    return True
-    return False
+                    return cm
+    return None
+
+
+def _cve_afecta(cve_data: dict, producto: str, version: str) -> bool:
+    return _cpe_coincidente(cve_data, producto, version) is not None
+
+
+def describir_coincidencia_cpe(cpe_match: dict) -> str:
+    """
+    Texto auditable de POR QUE NVD marco la coincidencia: el CPE y el rango
+    de versiones. Deja explicito cuando el rango NO tiene cota inferior, que
+    es la causa tipica de falsos positivos sobre software muy viejo.
+    """
+    criteria = cpe_match.get("criteria", "cpe desconocido")
+    partes = criteria.split(":")
+    v_cpe = partes[5] if len(partes) > 5 else "*"
+
+    if v_cpe not in ("*", "", "-"):
+        return f"{criteria} (versión exacta {v_cpe})"
+
+    cotas = []
+    if "versionStartIncluding" in cpe_match:
+        cotas.append(f">= {cpe_match['versionStartIncluding']}")
+    if "versionStartExcluding" in cpe_match:
+        cotas.append(f"> {cpe_match['versionStartExcluding']}")
+    if "versionEndIncluding" in cpe_match:
+        cotas.append(f"<= {cpe_match['versionEndIncluding']}")
+    if "versionEndExcluding" in cpe_match:
+        cotas.append(f"< {cpe_match['versionEndExcluding']}")
+
+    tiene_piso = any(c.startswith(">") for c in cotas)
+    rango = ", ".join(cotas) if cotas else "todas las versiones"
+    aviso = "" if tiene_piso else " [SIN COTA INFERIOR: verificar que aplique a esta versión]"
+    return f"{criteria} (rango: {rango}){aviso}"
 
 
 @dataclass
@@ -274,6 +308,7 @@ class CveEncontrado:
     descripcion: str
     cvss_score: Optional[float]
     severidad_nvd: Optional[str]
+    cpe_coincidente: str = ""
 
 
 @dataclass
@@ -302,10 +337,14 @@ def buscar_cves_por_producto(
     encontrados: list[CveEncontrado] = []
     for item in data.get("vulnerabilities", []):
         cve_data = item.get("cve", {})
-        if _cve_afecta(cve_data, producto, version):
+        cm = _cpe_coincidente(cve_data, producto, version)
+        if cm is not None:
             score, sev = _extraer_cvss(cve_data)
             encontrados.append(
-                CveEncontrado(cve_data.get("id", ""), _descripcion_en(cve_data), score, sev)
+                CveEncontrado(
+                    cve_data.get("id", ""), _descripcion_en(cve_data), score, sev,
+                    cpe_coincidente=describir_coincidencia_cpe(cm),
+                )
             )
 
     encontrados.sort(key=lambda c: c.cvss_score or 0.0, reverse=True)

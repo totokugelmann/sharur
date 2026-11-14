@@ -357,8 +357,11 @@ def _mostrar_riesgo_global(db: Session, caso: Caso) -> None:
 def _exportar_informe(db: Session, caso: Caso) -> None:
     from app.services import reporte_service
 
-    print("\n  [1] HTML   [2] PDF (si hay motor; si no, cae a HTML)")
-    formato = "pdf" if input("  Formato [1]: ").strip() == "2" else "html"
+    print("\n  [1] HTML   [2] PDF (si hay motor; si no, cae a HTML)   [3] Volver")
+    opcion = input("  Formato [1]: ").strip()
+    if opcion == "3":
+        return
+    formato = "pdf" if opcion == "2" else "html"
     try:
         res = reporte_service.exportar_informe(db, caso, formato=formato)
         db.commit()

@@ -1,7 +1,7 @@
 """
 Sharur SAIC - app/schemas/auditoria.py
 
-Esquemas Pydantic para auditoria, hallazgos y notificaciones.
+Esquemas Pydantic para auditoria, hallazgos.
 """
 
 from datetime import datetime
@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, ConfigDict
 
 from app.models.auditoria import TipoEvento
-from app.models.notificacion import ConfianzaHallazgo, EstadoNotificacion, SeveridadHallazgo
+from app.models.hallazgo import ConfianzaHallazgo, SeveridadHallazgo
 
 
 class EventoAuditoriaRead(BaseModel):
@@ -54,20 +54,6 @@ class HallazgoRead(BaseModel):
     nvd_verificado: bool
     nvd_score: Optional[float]
     creado_en: datetime
-
-
-class NotificacionRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    dispositivo_id: int
-    estado: EstadoNotificacion
-    destinatario_nombre: str
-    destinatario_rol: str
-    contenido: str
-    generada_en: datetime
-    enviada_en: Optional[datetime]
-    hash_contenido: str
 
 
 class AnalisisIARequest(BaseModel):

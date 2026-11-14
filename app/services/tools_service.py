@@ -96,7 +96,6 @@ NMAP_PROFILES = {
     "obj_default":   ["-sV", "-sC", "--top-ports", "1000", "-T4"],
     "obj_rapido":    ["-sV", "-F", "-T4"],
     "obj_completo":  ["-sV", "-sC", "-p-", "-T3"],
-    "obj_sigiloso":  ["-sS", "-T2", "--top-ports", "100"],
 }
 
 

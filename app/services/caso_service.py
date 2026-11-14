@@ -85,6 +85,9 @@ def cerrar_caso(
     que el cierre es directo: se registra el evento y se calcula el
     hash del reporte final.
     """
+    if caso.estado != EstadoCaso.ABIERTO:
+        raise ValueError("El caso ya está cerrado y no puede modificarse.")
+
     caso.motivo_cierre = motivo_cierre
     caso.cerrado_por = cerrado_por
     caso.cerrado_en = utc_now()

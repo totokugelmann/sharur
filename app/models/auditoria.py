@@ -40,6 +40,7 @@ class TipoEvento(str, enum.Enum):
     SESION_CORTADA = "sesion_cortada"
     CASO_CERRADO_MANUAL = "caso_cerrado_manual"
     CASO_CERRADO_AUTOMATICO = "caso_cerrado_automatico"
+    INFORME_EXPORTADO = "informe_exportado"
 
 
 class EventoAuditoria(Base):

@@ -253,7 +253,6 @@ _PERFILES_OBJETIVO = {
     "1": ("obj_default",  "-sV -sC --top-ports 1000", "Balance estándar"),
     "2": ("obj_rapido",   "-sV -F",                   "Top puertos, rápido"),
     "3": ("obj_completo", "-sV -sC -p-",              "Los 65535 puertos (lento)"),
-    "4": ("obj_sigiloso", "-sS -T2",                  "SYN scan lento (requiere privilegios)"),
 }
 
 def _menu_objetivos(db: Session, caso: Caso) -> None:
@@ -334,7 +333,39 @@ def _analizar_con_ia(db: Session, caso: Caso, target: str, resultado_tool) -> No
         print(f"├─ CITA DE EVIDENCIA: \"{h.cita_evidencia[:100]}...\"")
         print("─" * 60)
 
-    print(f"\n[RESUMEN] Se procesaron {len(hallazgos)} hallazgos. Todo guardado en la auditoría.")
+    conteo = {"confirmada": 0, "probable": 0, "descartada": 0}
+    for h in hallazgos:
+        conteo[h.confianza.value] += 1
+    print(
+        f"\n[RESUMEN] {len(hallazgos)} hallazgos: {conteo['confirmada']} confirmados (NVD), "
+        f"{conteo['probable']} probables, {conteo['descartada']} descartados. "
+        "Todo guardado en la auditoría."
+    )
+    _mostrar_riesgo_global(db, caso)
+
+
+def _mostrar_riesgo_global(db: Session, caso: Caso) -> None:
+    """Nivel de riesgo del caso, calculado sobre TODOS los hallazgos registrados."""
+    from app.models.hallazgo import Hallazgo
+    from app.services.riesgo_service import nivel_riesgo_global
+
+    hallazgos = db.query(Hallazgo).filter(Hallazgo.caso_id == caso.id).all()
+    nivel = nivel_riesgo_global(hallazgos)
+    print(f"[RIESGO GLOBAL DEL CASO] {nivel.value.upper()}")
+
+
+def _exportar_informe(db: Session, caso: Caso) -> None:
+    from app.services import reporte_service
+
+    print("\n  [1] HTML   [2] PDF (si hay motor; si no, cae a HTML)")
+    formato = "pdf" if input("  Formato [1]: ").strip() == "2" else "html"
+    try:
+        res = reporte_service.exportar_informe(db, caso, formato=formato)
+        db.commit()
+        print(f"\n[+] Informe generado: {res['ruta']}")
+        print(f"    Formato: {res['formato']} | SHA-256: {res['hash_sha256']}")
+    except Exception as exc:
+        print(f"\n[!] No se pudo exportar el informe: {exc}")
 
 
 def _consola_libre(db: Session, caso: Caso) -> None:
@@ -350,12 +381,14 @@ def menu_analisis(db: Session, caso: Caso) -> None:
         print("  [2] Objetivos (Escaneo profundo + Análisis IA)")
         print("  [3] Consola libre")
         print("  [4] Ver auditoría del caso")
-        print("  [5] Salir (cierra el caso)")
+        print("  [5] Exportar informe del caso")
+        print("  [6] Salir (cierra el caso)")
         opcion = input("Opción: ").strip()
 
         if opcion == "1": _menu_deteccion_hosts(db, caso)
         elif opcion == "2": _menu_objetivos(db, caso); _pausar()
         elif opcion == "3": _consola_libre(db, caso); _pausar()
         elif opcion == "4": _mostrar_auditoria(db, caso); _pausar()
-        elif opcion == "5": return
+        elif opcion == "5": _exportar_informe(db, caso); _pausar()
+        elif opcion == "6": return
         else: print("[!] Opción no válida.")

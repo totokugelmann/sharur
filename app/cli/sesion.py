@@ -78,3 +78,15 @@ def cerrar_caso(db: Session, caso: Caso) -> None:
         print(f"[+] Caso #{caso.id} cerrado.")
     except ValueError as exc:
         print(f"[!] No se pudo cerrar el caso: {exc}")
+        return
+
+    if input("¿Exportar el informe del caso ahora? [s/N]: ").strip().lower() in ("s", "si", "sí"):
+        from app.services import reporte_service
+
+        formato = "pdf" if input("  Formato  [1] HTML  [2] PDF  [1]: ").strip() == "2" else "html"
+        try:
+            res = reporte_service.exportar_informe(db, caso, formato=formato)
+            db.commit()
+            print(f"[+] Informe: {res['ruta']}  (SHA-256: {res['hash_sha256']})")
+        except Exception as exc:
+            print(f"[!] No se pudo exportar el informe: {exc}")

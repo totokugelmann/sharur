@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     # ── Fuente autoritativa de CVEs ──────────────────────────────
     NVD_API_URL: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
     NVD_API_KEY: str = ""  # opcional, mejora rate limit
+    NVD_CACHE_PATH: str = "logs/nvd_cache.json"
+    NVD_CACHE_TTL_HORAS: int = 24
 
     # ── Control de red / allow-list ──────────────────────────────
     # Interfaz de red o namespace usado para aplicar reglas de

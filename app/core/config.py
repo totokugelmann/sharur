@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # ── Identidad de la aplicacion ──────────────────────────────
     APP_NAME: str = "Sharur SAIC"
     APP_ENV: str = "development"  # development | staging | production
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "2.0.0"
 
     # ── Base de datos ────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+psycopg2://sharur:sharur@localhost:5432/sharur_saic"

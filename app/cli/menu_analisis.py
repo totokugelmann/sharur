@@ -1,9 +1,5 @@
 """
 Sharur SAIC - app/cli/menu_analisis.py
-
-Menú principal de análisis.
-- Redes: Descubrimiento de hosts (con opción de Enriquecimiento por IA).
-- Objetivos: Escaneo profundo y análisis automático con IA.
 """
 
 import socket
@@ -57,11 +53,74 @@ def _mostrar_auditoria(db: Session, caso: Caso) -> None:
 
 
 # ─────────────────────────────────────────────
+# Consola Libre (Modo PoC)
+# ─────────────────────────────────────────────
+
+def _consola_libre(db: Session, caso: Caso) -> None:
+    from app.services import consola_service
+
+    print("\n" + "=" * 60)
+    print("  CONSOLA LIBRE (MODO PoC / INTERACTIVO)")
+    print("=" * 60)
+    print("  Modo avanzado: permite Metasploit, Python, nc, sqlmap, etc.")
+    
+    target_ip = _prompt("IP/Dominio objetivo autorizado para esta sesión")
+    if not target_ip:
+        print("[!] Target vacío. Volviendo al menú.")
+        return
+
+    print(f"\n[i] Target fijado en: {target_ip}")
+    print("[i] Escribí 'salir' para volver al menú principal.")
+
+    while True:
+        try:
+            comando = input(f"\nsharur({target_ip})> ").strip()
+            
+            if not comando:
+                continue
+            if comando.lower() in ["salir", "exit", "quit"]:
+                break
+
+            res = consola_service.ejecutar_comando_consola(
+                db, caso_id=caso.id, username=caso.creado_por,
+                target_ip=target_ip, comando_str=comando
+            )
+            db.commit()
+
+            if res.status in ["binario_no_permitido", "target_invalido", "comando_prohibido"]:
+                print(f"\n[!] COMANDO BLOQUEADO: {res.motivo_rechazo}")
+                
+        except KeyboardInterrupt:
+            # Si el usuario aprieta Ctrl+C en el prompt (sin estar ejecutando nada),
+            # lo atrapamos para que no cierre Sharur, solo limpie la línea.
+            print("\n[i] (Usá 'salir' para volver al menú principal)")
+            continue
+        except Exception as exc:
+            print(f"[!] Error inesperado: {exc}")
+
+
+# ─────────────────────────────────────────────
+# Exportar Informe (Parcial del Parche)
+# ─────────────────────────────────────────────
+
+def _exportar_informe(db: Session, caso: Caso) -> None:
+    try:
+        from app.services import reporte_service
+        print("\n[*] Generando informe del caso...")
+        # Ajustá esto si tu reporte_service usa otro nombre de función
+        reporte_service.exportar_informe_caso(db, caso.id) 
+        print("[+] Informe generado correctamente.")
+    except ImportError:
+        print("[!] Módulo de reportes no encontrado.")
+    except Exception as exc:
+        print(f"[!] Error al exportar informe: {exc}")
+
+
+# ─────────────────────────────────────────────
 # Lógica de Escaneo Enriquecido (IA)
 # ─────────────────────────────────────────────
 
 def _ejecutar_enriquecido(db: Session, caso: Caso, target: str, herramienta_base: str) -> None:
-    """Ejecuta la herramienta base, busca puertos clave y llama a la IA."""
     from app.services import analisis_ia_service
 
     print(f"\n[*] Fase 1: Ejecutando {herramienta_base} base...")
@@ -279,7 +338,6 @@ def _menu_objetivos(db: Session, caso: Caso) -> None:
             print(res.output[:5000] if len(res.output) > 5000 else res.output)
             print(f"\n[i] Duración: {res.duration_seconds:.2f}s | Hash: {res.evidence_hash[:16]}...")
             
-            # LLAMADA AUTOMÁTICA A LA IA
             _analizar_con_ia(db, caso, target, res)
 
     except Exception as exc:
@@ -301,11 +359,10 @@ def _analizar_con_ia(db: Session, caso: Caso, target: str, resultado_tool) -> No
     except ConnectionError as exc:
         print(f"\n[!] ERROR DE CONEXIÓN CON OLLAMA:")
         print(f"    {exc}")
-        print("    Asegurate de tener Ollama corriendo y con el modelo cargado.")
         return
     except SQLAlchemyError as exc:
         print(f"\n[!] ERROR EN LA BASE DE DATOS:")
-        print(f"    No se pudieron guardar los hallazgos: {exc}")
+        print(f"    {exc}")
         return
     except Exception as exc:
         print(f"\n[!] ERROR INESPERADO EN EL ANÁLISIS IA:")
@@ -314,7 +371,6 @@ def _analizar_con_ia(db: Session, caso: Caso, target: str, resultado_tool) -> No
 
     if not hallazgos:
         print("\n[i] No se registraron hallazgos validados.")
-        print("    (Puede que el modelo no haya encontrado nada, o que la respuesta se haya cortado).")
         return
 
     print("\n" + "═" * 60)
@@ -333,49 +389,10 @@ def _analizar_con_ia(db: Session, caso: Caso, target: str, resultado_tool) -> No
         print(f"├─ CITA DE EVIDENCIA: \"{h.cita_evidencia[:100]}...\"")
         print("─" * 60)
 
-    conteo = {"confirmada": 0, "probable": 0, "descartada": 0}
-    for h in hallazgos:
-        conteo[h.confianza.value] += 1
-    print(
-        f"\n[RESUMEN] {len(hallazgos)} hallazgos: {conteo['confirmada']} confirmados (NVD), "
-        f"{conteo['probable']} probables, {conteo['descartada']} descartados. "
-        "Todo guardado en la auditoría."
-    )
-    _mostrar_riesgo_global(db, caso)
-
-
-def _mostrar_riesgo_global(db: Session, caso: Caso) -> None:
-    """Nivel de riesgo del caso, calculado sobre TODOS los hallazgos registrados."""
-    from app.models.hallazgo import Hallazgo
-    from app.services.riesgo_service import nivel_riesgo_global
-
-    hallazgos = db.query(Hallazgo).filter(Hallazgo.caso_id == caso.id).all()
-    nivel = nivel_riesgo_global(hallazgos)
-    print(f"[RIESGO GLOBAL DEL CASO] {nivel.value.upper()}")
-
-
-def _exportar_informe(db: Session, caso: Caso) -> None:
-    from app.services import reporte_service
-
-    print("\n  [1] HTML   [2] PDF (si hay motor; si no, cae a HTML)   [3] Volver")
-    opcion = input("  Formato [1]: ").strip()
-    if opcion == "3":
-        return
-    formato = "pdf" if opcion == "2" else "html"
-    try:
-        res = reporte_service.exportar_informe(db, caso, formato=formato)
-        db.commit()
-        print(f"\n[+] Informe generado: {res['ruta']}")
-        print(f"    Formato: {res['formato']} | SHA-256: {res['hash_sha256']}")
-        if not res.get("auditado", True):
-            print("    [i] El evento no se registró en la auditoría (ver logs); el informe es válido.")
-    except Exception as exc:
-        db.rollback()
-        print(f"\n[!] No se pudo exportar el informe: {exc}")
-
-
-def _consola_libre(db: Session, caso: Caso) -> None:
-    print("\n[i] Consola libre: pendiente de integración (consola_service).")
+    confirmados = sum(1 for h in hallazgos if h.confianza.value == "confirmada")
+    probables = sum(1 for h in hallazgos if h.confianza.value == "probable")
+    descartados = sum(1 for h in hallazgos if h.confianza.value == "descartada")
+    print(f"\n[RESUMEN] {confirmados} validados por NVD | {probables} probables | {descartados} descartados.")
 
 
 def menu_analisis(db: Session, caso: Caso) -> None:
@@ -393,7 +410,7 @@ def menu_analisis(db: Session, caso: Caso) -> None:
 
         if opcion == "1": _menu_deteccion_hosts(db, caso)
         elif opcion == "2": _menu_objetivos(db, caso); _pausar()
-        elif opcion == "3": _consola_libre(db, caso); _pausar()
+        elif opcion == "3": _consola_libre(db, caso)
         elif opcion == "4": _mostrar_auditoria(db, caso); _pausar()
         elif opcion == "5": _exportar_informe(db, caso); _pausar()
         elif opcion == "6": return

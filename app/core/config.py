@@ -91,6 +91,17 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_DIR: str = "./logs"
 
+    # Comandos y patrones prohibidos en la consola (para evitar destruir evidencia o la VM)
+    CONSOLE_BANNED_BINARIES: list = [
+        "rm", "mv", "dd", "mkfs", "shred", "wipe", 
+        "shutdown", "reboot", "halt", "poweroff", "init"
+    ]
+    
+    # Patrones regex prohibidos en cualquier parte del comando (evita inyecciones y piping)
+    CONSOLE_BANNED_PATTERNS: list = [
+        r"\brm\b", r"\bdd\b", r"\bmkfs\b", r"\bshutdown\b", r"\breboot\b",
+        r">", r">>", r"\|", r";", r"&&", r"\$\(.*\)", r"`.*`"
+    ]
 
 @lru_cache
 def get_settings() -> Settings:

@@ -8,8 +8,9 @@
 | **Autor** | Kugelmann, Tomás Ezequiel |
 | **Comisión** | A · Sede Posadas |
 | **Carrera** | Ingeniería en Sistemas de Información · Universidad de la Cuenca del Plata |
-| **Actividad** | Proyecto Integrador Final · Actividad de Evaluación N.º 2 |
-| **Etiqueta** | `v2.0` — MVP completo (gestión y auditoría + análisis de red, IA y consola) |
+| **Actividad** | Proyecto Integrador Final · Actividad de Evaluación N.º 4 (entrega final) |
+| **Etiqueta** | `v2.0.1` — mismo código que `v2.0` (MVP completo: gestión y auditoría + análisis de red, IA y consola) más el manual de despliegue, la declaración de IA en cinco campos y las versiones fijadas |
+| **Manual de despliegue** | [`MANUAL.md`](MANUAL.md) — procedimiento completo para una máquina limpia |
 
 ---
 
@@ -32,9 +33,9 @@ Requisitos del catálogo que implementa el núcleo auditable: **RF-01** (crear c
 
 ## 3. Entorno y dependencias
 
-Sharur corre en Linux (Debian, Ubuntu, Kali), WSL2 o Windows 11. Las tres herramientas base —**Python 3.12 o superior** (probado con 3.12 y 3.13), **Git 2.x** y **PostgreSQL 14 o superior**— no se dan por supuestas: instalarlas es el primer paso de la sección 4 (§4.1), por si todavía no las tenés en el equipo.
+Sharur corre en distribuciones Linux basadas en Debian (Debian, Ubuntu, Kali). Se verificó en Ubuntu 24.04 LTS y en Kali Linux rolling. Las tres herramientas base —**Python 3.12 o superior** (probado con 3.12 y 3.13), **Git 2.x** y **PostgreSQL 14 o superior**— no se dan por supuestas: su instalación es la sección 2 de `MANUAL.md`.
 
-Las dependencias de Python se instalan desde `requirements.txt`: SQLAlchemy 2.0.30 o superior, Pydantic 2.7.0 o superior, pydantic-settings 2.2.1 o superior, python-dotenv 1.0.1 o superior, psycopg2-binary 2.9.9 o superior, requests 2.31.0 o superior (NVD y Ollama) y Rich 13.7.0 o superior (presentación de la consola).
+Las dependencias de Python se instalan desde `requirements.txt`, con versión exacta: SQLAlchemy 2.1.8, pydantic 2.14.3, pydantic-settings 2.16.3, python-dotenv 1.2.4, psycopg2-binary 2.9.13, requests 2.34.2 (NVD y Ollama), rich 15.0.0 (presentación de la consola) y pytest 9.2.0.
 
 **Herramientas de sistema** (para los módulos de red y la consola): `nmap`, `arp-scan` y `netdiscover`. En Kali vienen preinstaladas; en otras distribuciones se instalan con el gestor de paquetes (por ejemplo `sudo apt install nmap arp-scan netdiscover`). Varias requieren privilegios de red (`sudo` o *capabilities*). La consola libre también reconoce binarios de reconocimiento como `whois`, `dig` y `curl` si están presentes.
 
@@ -44,208 +45,25 @@ Las dependencias de Python se instalan desde `requirements.txt`: SQLAlchemy 2.0.
 
 ---
 
-## 4. Instalación
+## 4. Instalación y ejecución
 
-Ejecutar los pasos en este orden.
+El procedimiento completo y probado en una máquina limpia está en **[`MANUAL.md`](MANUAL.md)**, en la raíz del repositorio: requisitos previos (sección 2), configuración y variables de `.env` (sección 4), base de datos (sección 5), dependencias, modelo de IA local y arranque (sección 6), recorrido de verificación (sección 8), pruebas automatizadas (sección 9) y problemas frecuentes (sección 10). Este archivo no lo repite, para que haya una sola fuente.
 
-### 4.1 Instalar las herramientas base (si no las tenés)
-
-Sharur necesita Python 3.12 o superior, Git 2.x y PostgreSQL 14 o superior. Si ya los tenés instalados, saltar a §4.2.
-
-**Linux (Debian / Ubuntu / Kali):**
+Inicio rápido en una distribución basada en Debian (Debian, Ubuntu o Kali), para quien ya tiene PostgreSQL, nmap, arp-scan y netdiscover:
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip postgresql postgresql-contrib
-# Herramientas de red para los módulos de descubrimiento (en Kali ya vienen):
-sudo apt install -y nmap arp-scan netdiscover
-# Arrancar el servicio de base de datos:
-sudo service postgresql start          # o: sudo systemctl enable --now postgresql
-```
-
-**Windows 11 (PowerShell, con winget):**
-
-```powershell
-winget install Git.Git
-winget install Python.Python.3.12
-winget install PostgreSQL.PostgreSQL
-```
-
-Comprobar que quedó todo disponible:
-
-```bash
-python3 --version    # 3.12 o superior
-git --version        # 2.x
-psql --version       # 14 o superior
-```
-
-### 4.2 Preparar la base de datos
-
-La forma recomendada es el script `scripts/init_db.sql`, que deja la base en un estado conocido y **se puede volver a correr cuantas veces haga falta**: borra lo anterior, recrea la base `sharur_db`, el usuario `sharur_user` y sus permisos, y alinea la versión de *collation* del template con la del sistema (necesario en Kali *rolling* tras actualizar `glibc`).
-
-En Linux, PostgreSQL usa autenticación *peer* para conexiones locales (el usuario del sistema debe coincidir con el rol, por eso `psql -U postgres` desde tu usuario falla con *"Peer authentication failed"*). Se ejecuta como el usuario `postgres` del sistema:
-
-```bash
+git clone https://github.com/totokugelmann/sharur.git && cd sharur && git checkout v2.0.1
 sudo -u postgres psql -f scripts/init_db.sql
-```
-
-En Windows, abrir **SQL Shell (psql)** como usuario `postgres` (o el Query Tool de pgAdmin) y ejecutar `\i scripts/init_db.sql`.
-
-<details>
-<summary>Equivalente paso a paso (si no se quiere usar el script)</summary>
-
-Entrar como superusuario (`sudo -u postgres psql`) y ejecutar:
-
-```sql
-DROP DATABASE IF EXISTS sharur_db;
-DROP ROLE IF EXISTS sharur_user;
-
-ALTER DATABASE template1 REFRESH COLLATION VERSION;   -- evita el error de collation en Kali rolling
-
-CREATE USER sharur_user WITH PASSWORD 'sharur_pass';
-CREATE DATABASE sharur_db OWNER sharur_user;
-GRANT ALL PRIVILEGES ON DATABASE sharur_db TO sharur_user;
-
-\c sharur_db
-GRANT ALL ON SCHEMA public TO sharur_user;            -- necesario en PostgreSQL 15 o superior
-```
-
-</details>
-
-### 4.3 Clonar el repositorio y posicionarse en la etiqueta
-
-```bash
-git clone https://github.com/totokugelmann/sharur.git
-cd sharur
-git checkout v2.0
-```
-
-### 4.4 Instalar las dependencias
-
-Crear un entorno virtual para no alterar los paquetes del sistema.
-
-**Linux / WSL:**
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-**Windows (PowerShell):**
-
-```powershell
-python -m venv venv
-# Si la ejecución de scripts está restringida, ejecutar primero:
-# Set-ExecutionPolicy Unrestricted -Scope CurrentUser
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-### 4.5 Modelo de IA local (opcional)
-
-Sólo si se van a usar el enriquecimiento o el análisis de vulnerabilidades. Instalar Ollama y descargar el modelo indicado en `.env` (`OLLAMA_MODEL`):
-
-```bash
-# Instalar Ollama (ver https://ollama.com) y luego, por ejemplo:
-ollama pull qwen2.5:4b     # variante liviana, recomendada para VMs
-ollama serve               # deja el motor escuchando en localhost:11434
-```
-
-El `Modelfile` del repositorio documenta el modelo de referencia del proyecto.
-
----
-
-## 5. Configuración
-
-El archivo de variables se genera a partir del de ejemplo.
-
-**Linux / WSL:**
-
-```bash
 cp .env.example .env
-nano .env
+python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+sudo venv/bin/python sharur_cli.py
 ```
 
-**Windows:**
-
-```powershell
-copy .env.example .env
-notepad .env
-```
-
-El `.env.example` ya trae el `DATABASE_URL` apuntando a la base y credenciales que crea el script de la §4.2, así que con `cp .env.example .env` normalmente no hace falta editar nada. Sólo cambialo si usaste otra contraseña o nombre de base:
-
-```
-DATABASE_URL=postgresql+psycopg2://sharur_user:sharur_pass@localhost:5432/sharur_db
-```
-
-Significado de las variables principales:
-
-| Variable | Significado |
-|---|---|
-| `APP_ENV` | Entorno de ejecución (`development`). |
-| `DATABASE_URL` | Cadena de conexión a PostgreSQL: usuario, contraseña, servidor, puerto y base. |
-| `LOG_LEVEL` | Nivel de detalle del registro de la aplicación (`INFO`). |
-| `LOG_DIR`, `REPORTS_DIR`, `EVIDENCE_STORAGE_DIR` | Carpetas locales para registros, reportes y evidencia. |
-| `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT` | Endpoint, nombre y tiempo máximo del modelo de IA local. |
-| `NVD_API_URL`, `NVD_API_KEY`, `NVD_CACHE_PATH`, `NVD_CACHE_TTL_HORAS` | Base nacional de vulnerabilidades: endpoint, clave opcional (mejora el límite de peticiones) y caché local. |
-
-Las variables `OLLAMA_*` y `NVD_*` sólo son necesarias para los módulos de análisis asistido; la gestión de casos, la auditoría y el descubrimiento de red funcionan sin ellas. El `NVD_API_KEY` es opcional pero recomendable para evitar el estrangulamiento de peticiones. El archivo `.env` real no se versiona.
+El `.env.example` ya apunta a la base que crea `scripts/init_db.sql`, de modo que no requiere ediciones; el `.env` real no se versiona. Con el entorno virtual activado, `pytest -q` debe informar `51 passed`.
 
 ---
 
-## 6. Ejecución y verificación
-
-### 6.1 Arranque
-
-```bash
-python sharur_cli.py
-```
-
-Sharur no expone ningún puerto ni dirección web: se opera desde la terminal. En el primer arranque crea automáticamente las tablas sobre la base vacía (casos, eventos de auditoría, órdenes, dispositivos, hallazgos y demás), sin pasos manuales de migración.
-
-### 6.2 Recorrido paso a paso
-
-1. En el menú principal, elegir **`[1] Crear caso`**.
-2. Ingresar el **número de expediente**, el **número de oficio** y el **operador**. Resultado esperado: `[+] Caso creado — expediente <número>`.
-3. En el menú del caso aparecen las opciones de trabajo:
-   - **`[1] Detectar hosts en red local`** — descubrimiento con nmap / arp-scan / netdiscover (con opción de enriquecimiento por IA).
-   - **`[2] Objetivos`** — escaneo profundo de un objetivo y análisis automático con IA + NVD.
-   - **`[3] Consola libre`** — comandos interactivos auditados contra un objetivo autorizado.
-   - **`[4] Ver auditoría del caso`** — últimos eventos de la cadena, con su secuencia y su hash SHA-256.
-   - **`[5] Exportar informe del caso`** — HTML o PDF, con su hash.
-   - **`[6] Salir (cierra el caso)`** — el caso pasa a estado cerrado y se sella el hash de reporte final.
-
-Para una verificación mínima del núcleo auditable, basta con `[1] Crear caso`, revisar **`[4]`** y cerrar con **`[6]`**: el caso queda cerrado con su hash de reporte final.
-
-### 6.3 Verificación de la persistencia
-
-Cerrar la aplicación y consultar la base:
-
-```sql
-SELECT numero_causa, estado, hash_reporte_final FROM casos;
-SELECT secuencia, hash_evento_anterior, hash_evento FROM eventos_auditoria ORDER BY secuencia;
-```
-
-Resultado esperado: el caso figura cerrado con su hash de reporte final, y cada evento conserva el hash del evento anterior, comenzando por un primer evento sin hash previo. Al volver a ejecutar `python sharur_cli.py`, los datos siguen presentes.
-
-### 6.4 Pruebas automatizadas
-
-Con el entorno virtual activado (paso 4.4):
-
-```bash
-pip install pytest
-pytest -q
-```
-
-Resultado esperado: `51 passed`. En distribuciones que protegen el Python del sistema, como Kali o Debian recientes, `pip` solo funciona dentro del entorno virtual activado.
-
-Las pruebas cubren el núcleo auditable (hash determinista, dependencia del evento anterior y detección de alteraciones — RF-08 y RNF-01), el parser de nmap, la búsqueda y el cruce de CVEs contra NVD, el cálculo de riesgo, el pipeline de análisis y la exportación del informe. No requieren base de datos ni modelo de IA.
-
----
-
-## 7. Limitaciones conocidas y alcance pericial
+## 5. Limitaciones conocidas y alcance pericial
 
 Sharur es una herramienta de **asistencia** al perito, no un sustituto de su criterio. Las siguientes limitaciones son inherentes al diseño del MVP y deben tenerse presentes al redactar el acta.
 
@@ -269,7 +87,7 @@ El análisis de IA se ejecuta sobre el CPU de la máquina virtual. En hardware l
 
 ---
 
-## 8. Estado del canal de construcción
+## 6. Estado del canal de construcción
 
 El canal de integración continua se define en `.github/workflows/ci.yml` y se ejecuta con GitHub Actions en cada envío a la rama principal y en cada etiqueta. En una máquina limpia instala Python 3.12 y las dependencias, y ejecuta las pruebas del núcleo auditable.
 
@@ -278,13 +96,18 @@ https://github.com/totokugelmann/sharur/actions
 
 ---
 
-## 9. Declaración de herramientas auxiliares
+## 7. Declaración de herramientas auxiliares (inteligencia artificial)
 
-Conforme al Protocolo de Uso Autorizado de la cátedra:
+Conforme al Protocolo de Uso Declarado de la cátedra (apartado 27.2 de la Guía Docente – Parte II). La misma declaración figura en `MANUAL.md` (sección 11) y en la Bitácora Individual del autor.
 
-| Herramienta | Función | Artefacto afectado |
-|---|---|---|
-| Asistente de inteligencia artificial | Asistencia de programación y redacción de pruebas automatizadas | Código fuente del prototipo y `tests/` |
-| Asistente de inteligencia artificial | Asistencia en la redacción de este archivo de lectura y de la configuración del canal de integración continua | `README.md`, `.github/workflows/ci.yml` |
+| Herramienta | Función | Pieza (commit) | Fecha | Verificación posterior del autor |
+|---|---|---|---|---|
+| Claude (Anthropic) | Canal de integración continua, pruebas de la cadena y `pytest.ini` | 9b8d5ba | 02/10/2026 | `pytest` local 5/5 y corrida exitosa en GitHub Actions |
+| Claude (Anthropic) | README de la versión v1 | 6102e4b | 02/10/2026 | Clonado y recorrido en máquina virtual |
+| Claude Code (Claude Opus 4.8) | Búsqueda de CVE por producto y versión, riesgo global, exportación del informe y limpieza | 8462e9e | 14/11/2026 | Batería de pruebas y recorrido manual del análisis |
+| Claude Code (Claude Opus 4.8) | Registro del CPE coincidente; opción «Volver» del informe; corrección de la exportación | 02bd4ca, 24fe6bc, 7e7c78d | 14/11/2026 | Batería de pruebas y exportación manual del informe |
+| Claude Code (Claude Opus 4.8) | Interfaz de consola con rich y corrección del menú de exportación | ada8a12 | 15/11/2026 | 51/51 pruebas y recorrido completo en consola |
+| Claude Code (Claude Opus 4.8) | Este archivo de lectura en la v2.0 (limitaciones y alcance pericial) | 04bbd87 | 15/11/2026 | Lectura completa y recorrido de la instalación |
+| Claude (Anthropic) | `MANUAL.md`, esta declaración y las versiones fijadas de `requirements.txt` | etiqueta v2.0.1 | 15/11/2026 | Recorrido completo del manual en máquina limpia |
 
 Ninguna herramienta auxiliar se empleó sobre datos de causas judiciales reales: todas las pruebas se ejecutan sobre datos sintéticos.

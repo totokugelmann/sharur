@@ -22,34 +22,36 @@ Uso:
 import sys
 
 import app.models  # noqa: F401 — registra todos los modelos SQLAlchemy
-from app.cli import sesion
+from app.cli import sesion, ui
 from app.cli.menu_analisis import menu_analisis
+from app.core.config import get_settings
 from app.models.base import Base, SessionLocal, engine
 
 # Crea las tablas faltantes al arrancar.
 # MVP: sin Alembic. Reemplazar por migraciones formales en producción.
 Base.metadata.create_all(bind=engine)
 
+_settings = get_settings()
+
 
 def menu_principal(db) -> bool:
     """Devuelve False para salir, True para repetir el menú."""
-    print()
-    print("=" * 50)
-    print("  SHARUR SAIC")
-    print("=" * 50)
-    print("  [1] Crear caso")
-    print("  [2] Salir")
-    print()
-
-    eleccion = input("Opción: ").strip()
+    eleccion = ui.menu(
+        "SHARUR SAIC",
+        [
+            ("1", "Crear caso", "Alta de causa y apertura de la cadena de auditoría"),
+            ("2", "Salir", "Cerrar Sharur"),
+        ],
+        subtitulo="Menú principal",
+    )
 
     if eleccion == "1":
         caso = sesion.crear_caso(db)
         if caso is None:
-            print("[!] No se creó el caso.")
+            ui.advertencia("No se creó el caso.")
             return True
 
-        print(f"\n[+] Caso creado — expediente {caso.numero_causa}")
+        ui.exito(f"Caso creado — expediente {caso.numero_causa}")
         menu_analisis(db, caso)
         sesion.cerrar_caso(db, caso)
         return True
@@ -57,18 +59,23 @@ def menu_principal(db) -> bool:
     if eleccion == "2":
         return False
 
-    print("[!] Opción no válida.")
+    ui.advertencia("Opción no válida.")
     return True
 
 
 def main() -> None:
+    ui.banner(version=f"v{_settings.APP_VERSION} · {_settings.APP_ENV}")
     db = SessionLocal()
     try:
         while menu_principal(db):
             pass
-        print("\nSesión finalizada.")
+        ui.info("Sesión finalizada.")
     except KeyboardInterrupt:
-        print("\n[!] Sesión interrumpida por el operador.")
+        print()
+        ui.advertencia("Sesión interrumpida por el operador.")
+    except EOFError:
+        print()
+        ui.info("Entrada finalizada. Sesión cerrada.")
     finally:
         db.close()
 

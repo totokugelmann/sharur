@@ -32,7 +32,7 @@ Requisitos del catálogo que implementa: **RF-01** (crear caso), **RF-08** (audi
 | PostgreSQL | 14 o superior, en ejecución |
 | Git | 2.x |
 
-Las dependencias de Python se instalan desde `requirements.txt`: SQLAlchemy 2.0.30 o superior, Pydantic 2.7.0 o superior, pydantic-settings 2.2.1 o superior, python-dotenv 1.0.1 o superior y psycopg2-binary 2.9.9 o superior.
+Las dependencias de Python se instalan desde `requirements.txt`: SQLAlchemy 2.0.30 o superior, Pydantic 2.7.0 o superior, pydantic-settings 2.2.1 o superior, python-dotenv 1.0.1 o superior, psycopg2-binary 2.9.9 o superior y Rich 13.7.0 o superior (capa de presentación de la consola). Si Rich no estuviera instalado, la interfaz degrada automáticamente a texto plano sin interrumpir el flujo.
 
 El modelo de inteligencia artificial local no es necesario para el v1. Cuando se habilite, requerirá entre 4 GB (variante liviana) y 8,4 GB (variante completa) de RAM libre.
 

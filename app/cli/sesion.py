@@ -14,17 +14,14 @@ Un caso se crea y se cierra dentro de la misma sesión del CLI.
 
 from sqlalchemy.orm import Session
 
+from app.cli import ui
 from app.models.caso import Caso
 from app.services import caso_service
 
 
 def _prompt(mensaje: str, obligatorio: bool = True) -> str:
     """Lee una línea. Si obligatorio y viene vacío, vuelve a pedir."""
-    while True:
-        valor = input(f"{mensaje}: ").strip()
-        if valor or not obligatorio:
-            return valor
-        print("[!] Este campo es obligatorio.")
+    return ui.pedir(mensaje, obligatorio=obligatorio)
 
 
 def crear_caso(db: Session) -> Caso | None:
@@ -33,10 +30,7 @@ def crear_caso(db: Session) -> Caso | None:
     La fecha de creación la pone el modelo (creado_en = utc_now).
     Devuelve None si hay un error de duplicidad (expediente u oficio).
     """
-    print()
-    print("=" * 50)
-    print("  NUEVO CASO")
-    print("=" * 50)
+    ui.titulo("NUEVO CASO", "Datos mínimos del expediente")
 
     numero_expediente = _prompt("Número de expediente")
     numero_oficio     = _prompt("Número de oficio")
@@ -57,7 +51,7 @@ def crear_caso(db: Session) -> Caso | None:
         db.refresh(caso)
         return caso
     except ValueError as exc:
-        print(f"\n[!] Error: {exc}")
+        ui.error(str(exc))
         return None
 
 
@@ -75,19 +69,25 @@ def cerrar_caso(db: Session, caso: Caso) -> None:
             cerrado_por=caso.creado_por,
         )
         db.commit()
-        print(f"[+] Caso #{caso.id} cerrado.")
+        ui.exito(f"Caso #{caso.id} cerrado.")
     except ValueError as exc:
-        print(f"[!] No se pudo cerrar el caso: {exc}")
+        ui.error(f"No se pudo cerrar el caso: {exc}")
         return
 
-    if input("¿Exportar el informe del caso ahora? [s/N]: ").strip().lower() in ("s", "si", "sí"):
+    if ui.confirmar("¿Exportar el informe del caso ahora?", default=False):
         from app.services import reporte_service
 
-        formato = "pdf" if input("  Formato  [1] HTML  [2] PDF  [1]: ").strip() == "2" else "html"
+        formato = "pdf" if ui.menu(
+            "Formato del informe",
+            [("1", "HTML"), ("2", "PDF", "si hay motor; si no, cae a HTML")],
+            prompt="Formato",
+        ) == "2" else "html"
         try:
-            res = reporte_service.exportar_informe(db, caso, formato=formato)
+            with ui.spinner("Generando informe..."):
+                res = reporte_service.exportar_informe(db, caso, formato=formato)
             db.commit()
-            print(f"[+] Informe: {res['ruta']}  (SHA-256: {res['hash_sha256']})")
+            ui.exito(f"Informe: {res['ruta']}")
+            ui.nota(f"SHA-256: {res['hash_sha256']}")
         except Exception as exc:
             db.rollback()
-            print(f"[!] No se pudo exportar el informe: {exc}")
+            ui.error(f"No se pudo exportar el informe: {exc}")

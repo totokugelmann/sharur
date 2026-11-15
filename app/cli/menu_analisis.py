@@ -1,23 +1,32 @@
 """
 Sharur SAIC - app/cli/menu_analisis.py
+
+Menú principal de análisis, dentro de un caso abierto.
+- Redes: descubrimiento de hosts (con opción de enriquecimiento por IA).
+- Objetivos: escaneo profundo y análisis automático con IA + NVD.
+- Consola libre: comandos interactivos auditados.
+- Auditoría, informe y cierre.
+
+Toda la presentación pasa por app.cli.ui (rich). La lógica y las
+llamadas a los servicios no cambian respecto del núcleo auditable.
 """
 
 import socket
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.cli import ui
 from app.models.caso import Caso
 from app.services import tools_service
 
 
 def _prompt(msg: str, default: str = None) -> str:
-    sufijo = f" [{default}]" if default else ""
-    valor = input(f"{msg}{sufijo}: ").strip()
-    return valor or default or ""
+    return ui.pedir(msg, default=default, obligatorio=default is None)
 
 
 def _pausar() -> None:
-    input("\nPresione ENTER para continuar...")
+    ui.pausar()
 
 
 def _get_local_ip() -> str:
@@ -32,8 +41,13 @@ def _get_local_ip() -> str:
     return ip
 
 
+def _pie_tool(res) -> str:
+    return f"Duración: {res.duration_seconds:.2f}s   |   Hash evidencia: {res.evidence_hash[:16]}..."
+
+
 def _mostrar_auditoria(db: Session, caso: Caso) -> None:
     from app.models.auditoria import EventoAuditoria
+
     eventos = (
         db.query(EventoAuditoria)
         .filter(EventoAuditoria.caso_id == caso.id)
@@ -41,41 +55,35 @@ def _mostrar_auditoria(db: Session, caso: Caso) -> None:
         .limit(25)
         .all()
     )
-    print("\n" + "=" * 60)
-    print(f"  ÚLTIMOS 25 EVENTOS DE AUDITORÍA — Caso #{caso.id}")
-    print("=" * 60)
+    ui.titulo(f"ÚLTIMOS 25 EVENTOS DE AUDITORÍA", f"Caso #{caso.id} · {caso.numero_causa}")
     if not eventos:
-        print("  (sin eventos)")
+        ui.info("(sin eventos)")
         return
-    for e in eventos:
-        actor = e.actor_username or "-"
-        print(f"  [{e.secuencia:04d}] {e.tipo_evento.value:<22} {actor:<15} {e.descripcion[:60]}")
+    ui.tabla_auditoria(eventos)
 
 
 # ─────────────────────────────────────────────
-# Consola Libre (Modo PoC)
+# Consola Libre (Modo PoC / interactivo)
 # ─────────────────────────────────────────────
 
 def _consola_libre(db: Session, caso: Caso) -> None:
     from app.services import consola_service
 
-    print("\n" + "=" * 60)
-    print("  CONSOLA LIBRE (MODO PoC / INTERACTIVO)")
-    print("=" * 60)
-    print("  Modo avanzado: permite Metasploit, Python, nc, sqlmap, etc.")
-    
-    target_ip = _prompt("IP/Dominio objetivo autorizado para esta sesión")
+    ui.titulo("CONSOLA LIBRE", "Modo interactivo auditado")
+    ui.info("Cada línea queda registrada en la cadena de auditoría del caso, autorizada o no.")
+
+    target_ip = ui.pedir("IP/Dominio objetivo autorizado para esta sesión", obligatorio=False)
     if not target_ip:
-        print("[!] Target vacío. Volviendo al menú.")
+        ui.advertencia("Target vacío. Volviendo al menú.")
         return
 
-    print(f"\n[i] Target fijado en: {target_ip}")
-    print("[i] Escribí 'salir' para volver al menú principal.")
+    ui.info(f"Target fijado en: {target_ip}")
+    ui.nota("Escribí 'salir' para volver al menú principal.")
 
     while True:
         try:
-            comando = input(f"\nsharur({target_ip})> ").strip()
-            
+            comando = ui.pedir(f"sharur({target_ip})", obligatorio=False)
+
             if not comando:
                 continue
             if comando.lower() in ["salir", "exit", "quit"]:
@@ -88,32 +96,47 @@ def _consola_libre(db: Session, caso: Caso) -> None:
             db.commit()
 
             if res.status in ["binario_no_permitido", "target_invalido", "comando_prohibido"]:
-                print(f"\n[!] COMANDO BLOQUEADO: {res.motivo_rechazo}")
-                
+                ui.error(f"COMANDO BLOQUEADO: {res.motivo_rechazo}")
+
         except KeyboardInterrupt:
-            # Si el usuario aprieta Ctrl+C en el prompt (sin estar ejecutando nada),
-            # lo atrapamos para que no cierre Sharur, solo limpie la línea.
-            print("\n[i] (Usá 'salir' para volver al menú principal)")
+            # Ctrl+C en el prompt (sin ejecutar nada): no cierra Sharur.
+            print()
+            ui.nota("(Usá 'salir' para volver al menú principal)")
             continue
         except Exception as exc:
-            print(f"[!] Error inesperado: {exc}")
+            ui.error(f"Error inesperado: {exc}")
 
 
 # ─────────────────────────────────────────────
-# Exportar Informe (Parcial del Parche)
+# Exportar informe
 # ─────────────────────────────────────────────
 
 def _exportar_informe(db: Session, caso: Caso) -> None:
+    from app.services import reporte_service
+
+    opcion = ui.menu(
+        "Exportar informe del caso",
+        [
+            ("1", "HTML"),
+            ("2", "PDF", "si hay motor; si no, cae a HTML"),
+            ("3", "Volver"),
+        ],
+        prompt="Formato",
+    )
+    if opcion == "3":
+        return
+    formato = "pdf" if opcion == "2" else "html"
     try:
-        from app.services import reporte_service
-        print("\n[*] Generando informe del caso...")
-        # Ajustá esto si tu reporte_service usa otro nombre de función
-        reporte_service.exportar_informe_caso(db, caso.id) 
-        print("[+] Informe generado correctamente.")
-    except ImportError:
-        print("[!] Módulo de reportes no encontrado.")
+        with ui.spinner("Generando informe del caso..."):
+            res = reporte_service.exportar_informe(db, caso, formato=formato)
+        db.commit()
+        ui.exito(f"Informe generado: {res['ruta']}")
+        ui.nota(f"Formato: {res['formato']}   |   SHA-256: {res['hash_sha256']}")
+        if not res.get("auditado", True):
+            ui.info("El evento no se registró en la auditoría (ver logs); el informe es válido.")
     except Exception as exc:
-        print(f"[!] Error al exportar informe: {exc}")
+        db.rollback()
+        ui.error(f"No se pudo exportar el informe: {exc}")
 
 
 # ─────────────────────────────────────────────
@@ -123,7 +146,7 @@ def _exportar_informe(db: Session, caso: Caso) -> None:
 def _ejecutar_enriquecido(db: Session, caso: Caso, target: str, herramienta_base: str) -> None:
     from app.services import analisis_ia_service
 
-    print(f"\n[*] Fase 1: Ejecutando {herramienta_base} base...")
+    ui.info(f"Fase 1: ejecutando {herramienta_base} base...")
     res_base = None
     if herramienta_base == "arp-scan":
         res_base = tools_service.run_arp_scan(db, caso_id=caso.id, username=caso.creado_por, target=target)
@@ -131,41 +154,39 @@ def _ejecutar_enriquecido(db: Session, caso: Caso, target: str, herramienta_base
         res_base = tools_service.run_netdiscover(db, caso_id=caso.id, username=caso.creado_por, target=target)
     elif herramienta_base == "nmap":
         res_base = tools_service.run_nmap(db, caso_id=caso.id, username=caso.creado_por, target=target, profile="red_basico")
-    
+
     if not res_base or res_base.status != "ok":
-        print("[!] Falló el escaneo base.")
+        ui.error("Falló el escaneo base.")
         return
 
-    print("[*] Fase 2: Buscando huellas de dispositivos (puertos clave)...")
+    ui.info("Fase 2: buscando huellas de dispositivos (puertos clave)...")
     res_puertos = tools_service.run_nmap(
         db, caso_id=caso.id, username=caso.creado_por, target=target, profile="red_identificacion"
     )
     db.commit()
 
-    print("[*] Fase 3: Enviando evidencia a la IA para identificar dispositivos...")
-    print("    Esto puede tardar (la IA está analizando las MACs y puertos)...")
-
     try:
-        dispositivos = analisis_ia_service.identificar_dispositivos_red(
-            db, caso_id=caso.id, username=caso.creado_por,
-            resultado_arp=res_base, resultado_nmap_puertos=res_puertos
-        )
+        with ui.spinner("Fase 3: la IA está analizando MACs y puertos..."):
+            dispositivos = analisis_ia_service.identificar_dispositivos_red(
+                db, caso_id=caso.id, username=caso.creado_por,
+                resultado_arp=res_base, resultado_nmap_puertos=res_puertos
+            )
     except Exception as exc:
-        print(f"\n[!] Error consultando a la IA: {exc}")
+        ui.error(f"Error consultando a la IA: {exc}")
         return
 
     if not dispositivos:
-        print("\n[i] La IA no pudo identificar dispositivos (o la red está vacía).")
+        ui.info("La IA no pudo identificar dispositivos (o la red está vacía).")
         return
 
-    print("\n" + "═" * 60)
-    print("  INVENTARIO DE DISPOSITIVOS IDENTIFICADOS")
-    print("═" * 60)
+    lineas = []
     for d in dispositivos:
-        print(f"  IP: {d.get('ip')} | MAC: {d.get('mac')}")
-        print(f"  TIPO: {d.get('tipo')} (Confianza: {d.get('confianza').upper()})")
-        print(f"  RAZÓN: {d.get('razon')}")
-        print("─" * 60)
+        conf = (d.get("confianza") or "").upper()
+        lineas.append(f"IP: {d.get('ip')}   |   MAC: {d.get('mac')}")
+        lineas.append(f"  TIPO: {d.get('tipo')}  (Confianza: {conf})")
+        lineas.append(f"  RAZÓN: {d.get('razon')}")
+        lineas.append("")
+    ui.panel("\n".join(lineas).rstrip(), cabecera="INVENTARIO DE DISPOSITIVOS IDENTIFICADOS", estilo=ui.OK)
 
 
 # ─────────────────────────────────────────────
@@ -174,19 +195,22 @@ def _ejecutar_enriquecido(db: Session, caso: Caso, target: str, herramienta_base
 
 def _menu_nmap_redes(db: Session, caso: Caso, target: str) -> None:
     while True:
-        print("\n  --- Perfiles de Nmap (Redes) ---")
-        print("  [1] Básico     (-sn) Ping scan estándar")
-        print("  [2] Rápido     (-sn -T4 -n) Ping rápido sin DNS")
-        print("  [3] Profundo   (-Pn -PS...) Fuerza TCP SYN, atraviesa firewalls")
-        print("  [4] Sigiloso   (-sn -T2) Ping lento, menos ruido")
-        print("  [5] Enriquecido (Escaneo + IA para identificar dispositivos)")
-        print("  [6] Volver")
-        
-        op = input("  Opción: ").strip()
-        
-        if op == "6": return
+        op = ui.menu(
+            "Perfiles de Nmap (Redes)",
+            [
+                ("1", "Básico", "-sn · ping scan estándar"),
+                ("2", "Rápido", "-sn -T4 -n · ping rápido sin DNS"),
+                ("3", "Profundo", "-Pn -PS... · fuerza TCP SYN, atraviesa firewalls"),
+                ("4", "Sigiloso", "-sn -T2 · ping lento, menos ruido"),
+                ("5", "Enriquecido", "escaneo + IA para identificar dispositivos"),
+                ("6", "Volver"),
+            ],
+        )
+
+        if op == "6":
+            return
         if op not in ["1", "2", "3", "4", "5"]:
-            print("[!] Opción inválida.")
+            ui.advertencia("Opción inválida.")
             continue
 
         if op == "5":
@@ -195,113 +219,73 @@ def _menu_nmap_redes(db: Session, caso: Caso, target: str) -> None:
             return
 
         perfil = {"1": "red_basico", "2": "red_rapido", "3": "red_profundo", "4": "red_sigiloso"}[op]
-        print(f"\n[*] Ejecutando nmap ({perfil}) en {target}...")
-        res = tools_service.run_nmap(db, caso_id=caso.id, username=caso.creado_por, target=target, profile=perfil)
+        with ui.spinner(f"Ejecutando nmap ({perfil}) en {target}..."):
+            res = tools_service.run_nmap(db, caso_id=caso.id, username=caso.creado_por, target=target, profile=perfil)
         db.commit()
-        
-        print("\n" + "=" * 60)
-        print(f"  RESULTADO: nmap ({res.status})")
-        print("=" * 60)
-        print(res.output or "(sin salida)")
-        print(f"\n[i] Duración: {res.duration_seconds:.2f}s | Hash: {res.evidence_hash[:16]}...")
-        
-        if "1 host up" in res.output or "0 responded" in res.output:
-            print("\n[!] No se encontraron otros hosts. Posible AP Isolation.")
-            print("    ==> PROBÁ CON EL PERFIL [3] PROFUNDO o [5] ENRIQUECIDO.")
+
+        ui.resultado_tool(f"nmap · {perfil}", res.status, res.output, _pie_tool(res))
+
+        if "1 host up" in (res.output or "") or "0 responded" in (res.output or ""):
+            ui.advertencia("No se encontraron otros hosts. Posible AP Isolation.")
+            ui.nota("Probá con el perfil [3] Profundo o [5] Enriquecido.")
         _pausar()
         return
 
 
-def _menu_arp_scan(db: Session, caso: Caso, target: str) -> None:
+def _submenu_capa2(db: Session, caso: Caso, target: str, herramienta: str, runner) -> None:
     while True:
-        print("\n  --- arp-scan ---")
-        print("  [1] Básico     (Escaneo Capa 2 ultra rápido)")
-        print("  [2] Enriquecido (Escaneo + IA para identificar dispositivos)")
-        print("  [3] Volver")
-        
-        op = input("  Opción: ").strip()
-        
-        if op == "3": return
+        op = ui.menu(
+            herramienta,
+            [
+                ("1", "Básico", "escaneo Capa 2"),
+                ("2", "Enriquecido", "escaneo + IA para identificar dispositivos"),
+                ("3", "Volver"),
+            ],
+        )
+        if op == "3":
+            return
         if op not in ["1", "2"]:
-            print("[!] Opción inválida.")
+            ui.advertencia("Opción inválida.")
             continue
-
         if op == "2":
-            _ejecutar_enriquecido(db, caso, target, "arp-scan")
+            _ejecutar_enriquecido(db, caso, target, herramienta)
             _pausar()
             return
 
-        print(f"\n[*] Ejecutando arp-scan en {target}...")
-        res = tools_service.run_arp_scan(db, caso_id=caso.id, username=caso.creado_por, target=target)
+        with ui.spinner(f"Ejecutando {herramienta} en {target}..."):
+            res = runner(db, caso_id=caso.id, username=caso.creado_por, target=target)
         db.commit()
-        
-        print("\n" + "=" * 60)
-        print(f"  RESULTADO: arp-scan ({res.status})")
-        print("=" * 60)
-        print(res.output or "(sin salida)")
-        print(f"\n[i] Duración: {res.duration_seconds:.2f}s | Hash: {res.evidence_hash[:16]}...")
+        ui.resultado_tool(herramienta, res.status, res.output, _pie_tool(res))
         _pausar()
         return
 
-
-def _menu_netdiscover(db: Session, caso: Caso, target: str) -> None:
-    while True:
-        print("\n  --- netdiscover ---")
-        print("  [1] Básico     (Escaneo Capa 2)")
-        print("  [2] Enriquecido (Escaneo + IA para identificar dispositivos)")
-        print("  [3] Volver")
-        
-        op = input("  Opción: ").strip()
-        
-        if op == "3": return
-        if op not in ["1", "2"]:
-            print("[!] Opción inválida.")
-            continue
-
-        if op == "2":
-            _ejecutar_enriquecido(db, caso, target, "netdiscover")
-            _pausar()
-            return
-
-        print(f"\n[*] Ejecutando netdiscover en {target}...")
-        res = tools_service.run_netdiscover(db, caso_id=caso.id, username=caso.creado_por, target=target)
-        db.commit()
-        
-        print("\n" + "=" * 60)
-        print(f"  RESULTADO: netdiscover ({res.status})")
-        print("=" * 60)
-        print(res.output or "(sin salida)")
-        print(f"\n[i] Duración: {res.duration_seconds:.2f}s | Hash: {res.evidence_hash[:16]}...")
-        _pausar()
-        return
-
-
-# ─────────────────────────────────────────────
-# Menú Principal de Redes
-# ─────────────────────────────────────────────
 
 def _menu_deteccion_hosts(db: Session, caso: Caso) -> None:
     ip_local = _get_local_ip()
     target = "127.0.0.1" if ip_local.startswith("127.") else f"{'.'.join(ip_local.split('.')[:3])}.0/24"
 
     while True:
-        print("\n" + "=" * 60)
-        print("  DETECCIÓN DE HOSTS EN RED LOCAL")
-        print("=" * 60)
-        print(f"  Tu IP: {ip_local} | Red detectada: {target}")
-        print("  Seleccioná la herramienta:")
-        print("  [1] nmap")
-        print("  [2] arp-scan")
-        print("  [3] netdiscover")
-        print("  [4] Volver al menú principal")
-        
-        op = input("\nOpción: ").strip()
+        op = ui.menu(
+            "DETECCIÓN DE HOSTS EN RED LOCAL",
+            [
+                ("1", "nmap"),
+                ("2", "arp-scan"),
+                ("3", "netdiscover"),
+                ("4", "Volver al menú principal"),
+            ],
+            subtitulo=f"Tu IP: {ip_local}   ·   Red detectada: {target}",
+        )
 
-        if op == "4": return
-        elif op == "1": _menu_nmap_redes(db, caso, target)
-        elif op == "2": _menu_arp_scan(db, caso, target)
-        elif op == "3": _menu_netdiscover(db, caso, target)
-        else: print("[!] Opción no válida.")
+        if op == "4":
+            return
+        elif op == "1":
+            _menu_nmap_redes(db, caso, target)
+        elif op == "2":
+            _submenu_capa2(db, caso, target, "arp-scan", tools_service.run_arp_scan)
+        elif op == "3":
+            _submenu_capa2(db, caso, target, "netdiscover", tools_service.run_netdiscover)
+        else:
+            ui.advertencia("Opción no válida.")
 
 
 # ─────────────────────────────────────────────
@@ -309,109 +293,132 @@ def _menu_deteccion_hosts(db: Session, caso: Caso) -> None:
 # ─────────────────────────────────────────────
 
 _PERFILES_OBJETIVO = {
-    "1": ("obj_default",  "-sV -sC --top-ports 1000", "Balance estándar"),
-    "2": ("obj_rapido",   "-sV -F",                   "Top puertos, rápido"),
-    "3": ("obj_completo", "-sV -sC -p-",              "Los 65535 puertos (lento)"),
+    "1": ("obj_default", "-sV -sC --top-ports 1000", "Balance estándar"),
+    "2": ("obj_rapido", "-sV -F", "Top puertos, rápido"),
+    "3": ("obj_completo", "-sV -sC -p-", "Los 65535 puertos (lento)"),
 }
 
+
 def _menu_objetivos(db: Session, caso: Caso) -> None:
-    print("\n--- nmap · Objetivos (Puertos/Servicios) ---")
-    target = _prompt("IP o dominio del objetivo")
-    if not target: return
-    
-    print("Perfiles disponibles:")
-    for k, (nombre, flags, desc) in _PERFILES_OBJETIVO.items():
-        print(f"  [{k}] {nombre:<10} {flags:<27} {desc}")
-    perfil_codigo = _prompt("Perfil", default="1")
+    target = ui.pedir("IP o dominio del objetivo", obligatorio=False)
+    if not target:
+        return
+
+    perfil_codigo = ui.menu(
+        "nmap · Objetivos (Puertos/Servicios)",
+        [(k, nombre, f"{flags}  —  {desc}") for k, (nombre, flags, desc) in _PERFILES_OBJETIVO.items()],
+        prompt="Perfil",
+    )
     perfil = _PERFILES_OBJETIVO.get(perfil_codigo, _PERFILES_OBJETIVO["1"])
 
-    print(f"\n[*] Ejecutando nmap ({perfil[0]}) contra {target}...")
     try:
-        res = tools_service.run_nmap(db, caso_id=caso.id, username=caso.creado_por, target=target, profile=perfil[0])
+        with ui.spinner(f"Ejecutando nmap ({perfil[0]}) contra {target}..."):
+            res = tools_service.run_nmap(db, caso_id=caso.id, username=caso.creado_por, target=target, profile=perfil[0])
         db.commit()
 
-        print("\n" + "=" * 60)
-        print(f"  RESULTADO: nmap ({res.status})")
-        print("=" * 60)
-        
         if res.status == "ok":
-            print(res.output[:5000] if len(res.output) > 5000 else res.output)
-            print(f"\n[i] Duración: {res.duration_seconds:.2f}s | Hash: {res.evidence_hash[:16]}...")
-            
+            cuerpo = res.output[:5000] if len(res.output or "") > 5000 else (res.output or "")
+            ui.resultado_tool(f"nmap · {perfil[0]}", res.status, cuerpo, _pie_tool(res))
             _analizar_con_ia(db, caso, target, res)
-
+        else:
+            ui.resultado_tool(f"nmap · {perfil[0]}", res.status, res.output or "", _pie_tool(res))
     except Exception as exc:
-        print(f"\n[!] Error al ejecutar nmap: {exc}")
+        ui.error(f"Error al ejecutar nmap: {exc}")
 
 
 def _analizar_con_ia(db: Session, caso: Caso, target: str, resultado_tool) -> None:
     from app.services import analisis_ia_service
-    
-    print("\n[*] ENVIANDO EVIDENCIA AL MODELO DE IA (Ollama + NVD)...")
-    print("    Analizando vulnerabilidades, puede tardar unos segundos...")
 
     try:
-        hallazgos = analisis_ia_service.analizar_evidencia(
-            db, caso_id=caso.id, username=caso.creado_por,
-            herramienta=resultado_tool.tool, resultado_tool=resultado_tool
-        )
+        with ui.spinner("Enviando evidencia al modelo (Ollama + NVD), puede tardar..."):
+            hallazgos = analisis_ia_service.analizar_evidencia(
+                db, caso_id=caso.id, username=caso.creado_por,
+                herramienta=resultado_tool.tool, resultado_tool=resultado_tool
+            )
         db.commit()
     except ConnectionError as exc:
-        print(f"\n[!] ERROR DE CONEXIÓN CON OLLAMA:")
-        print(f"    {exc}")
+        ui.error("Error de conexión con Ollama:")
+        ui.nota(str(exc))
         return
     except SQLAlchemyError as exc:
-        print(f"\n[!] ERROR EN LA BASE DE DATOS:")
-        print(f"    {exc}")
+        ui.error("Error en la base de datos:")
+        ui.nota(str(exc))
         return
     except Exception as exc:
-        print(f"\n[!] ERROR INESPERADO EN EL ANÁLISIS IA:")
-        print(f"    {exc}")
+        ui.error("Error inesperado en el análisis IA:")
+        ui.nota(str(exc))
         return
 
     if not hallazgos:
-        print("\n[i] No se registraron hallazgos validados.")
+        ui.info("No se registraron hallazgos validados.")
+        _mostrar_riesgo_global(db, caso)
         return
 
-    print("\n" + "═" * 60)
-    print(f"  [SHARUR - ANÁLISIS DE VULNERABILIDADES]")
-    print(f"  TARGET: {target}")
-    print("═" * 60)
-    
+    ui.titulo("SHARUR — ANÁLISIS DE VULNERABILIDADES", f"Target: {target}")
     for i, h in enumerate(hallazgos, 1):
-        icono = "✓" if h.confianza.value == "confirmada" else ("~" if h.confianza.value == "probable" else "X")
-        print(f"\nHALLAZGO {i} | {icono} CONFIANZA: {h.confianza.value.upper()}")
-        print(f"├─ TÍTULO: {h.titulo}")
-        print(f"├─ SEVERIDAD: {h.severidad.value.upper()}")
+        conf = h.confianza.value
+        icono = ui.ICONO_CONFIANZA.get(conf, "[?]")
+        lineas = [
+            f"TÍTULO: {h.titulo}",
+            f"SEVERIDAD: {h.severidad.value.upper()}",
+        ]
         if h.cve_id:
-            nvd_info = f" [Validado NVD - CVSS: {h.nvd_score}]" if h.nvd_verificado else " [No verificado]"
-            print(f"├─ CVE: {h.cve_id}{nvd_info}")
-        print(f"├─ CITA DE EVIDENCIA: \"{h.cita_evidencia[:100]}...\"")
-        print("─" * 60)
+            nvd = f" [Validado NVD · CVSS: {h.nvd_score}]" if h.nvd_verificado else " [No verificado]"
+            lineas.append(f"CVE: {h.cve_id}{nvd}")
+        lineas.append(f'CITA DE EVIDENCIA: "{h.cita_evidencia[:100]}..."')
+        estilo = ui.COLOR_CONFIANZA.get(conf, ui.INFO)
+        ui.panel("\n".join(lineas), cabecera=f"HALLAZGO {i}  ·  {icono} {conf.upper()}", estilo=estilo)
 
     confirmados = sum(1 for h in hallazgos if h.confianza.value == "confirmada")
     probables = sum(1 for h in hallazgos if h.confianza.value == "probable")
     descartados = sum(1 for h in hallazgos if h.confianza.value == "descartada")
-    print(f"\n[RESUMEN] {confirmados} validados por NVD | {probables} probables | {descartados} descartados.")
+    ui.info(f"{confirmados} validados por NVD   |   {probables} probables   |   {descartados} descartados")
+    _mostrar_riesgo_global(db, caso)
 
+
+def _mostrar_riesgo_global(db: Session, caso: Caso) -> None:
+    """Nivel de riesgo del caso, calculado sobre TODOS los hallazgos registrados."""
+    from app.models.hallazgo import Hallazgo
+    from app.services.riesgo_service import nivel_riesgo_global
+
+    hallazgos = db.query(Hallazgo).filter(Hallazgo.caso_id == caso.id).all()
+    nivel = nivel_riesgo_global(hallazgos)
+    ui.etiqueta_riesgo(nivel.value)
+
+
+# ─────────────────────────────────────────────
+# Menú principal del caso
+# ─────────────────────────────────────────────
 
 def menu_analisis(db: Session, caso: Caso) -> None:
     while True:
-        print("\n" + "=" * 60)
-        print(f"  SHARUR — Caso #{caso.id} ({caso.numero_causa})")
-        print("=" * 60)
-        print("  [1] Detectar hosts en Red Local")
-        print("  [2] Objetivos (Escaneo profundo + Análisis IA)")
-        print("  [3] Consola libre")
-        print("  [4] Ver auditoría del caso")
-        print("  [5] Exportar informe del caso")
-        print("  [6] Salir (cierra el caso)")
-        opcion = input("Opción: ").strip()
+        opcion = ui.menu(
+            f"SHARUR — Caso #{caso.id}",
+            [
+                ("1", "Detectar hosts en red local"),
+                ("2", "Objetivos", "escaneo profundo + análisis IA"),
+                ("3", "Consola libre"),
+                ("4", "Ver auditoría del caso"),
+                ("5", "Exportar informe del caso"),
+                ("6", "Salir", "cierra el caso"),
+            ],
+            subtitulo=caso.numero_causa,
+        )
 
-        if opcion == "1": _menu_deteccion_hosts(db, caso)
-        elif opcion == "2": _menu_objetivos(db, caso); _pausar()
-        elif opcion == "3": _consola_libre(db, caso)
-        elif opcion == "4": _mostrar_auditoria(db, caso); _pausar()
-        elif opcion == "5": _exportar_informe(db, caso); _pausar()
-        elif opcion == "6": return
-        else: print("[!] Opción no válida.")
+        if opcion == "1":
+            _menu_deteccion_hosts(db, caso)
+        elif opcion == "2":
+            _menu_objetivos(db, caso)
+            _pausar()
+        elif opcion == "3":
+            _consola_libre(db, caso)
+        elif opcion == "4":
+            _mostrar_auditoria(db, caso)
+            _pausar()
+        elif opcion == "5":
+            _exportar_informe(db, caso)
+            _pausar()
+        elif opcion == "6":
+            return
+        else:
+            ui.advertencia("Opción no válida.")

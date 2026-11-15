@@ -4,6 +4,9 @@ pydantic>=2.7.0
 pydantic-settings>=2.2.1
 python-dotenv>=1.0.1
 
+# --- Interfaz de consola (presentación) ---
+rich>=13.7.0
+
 # --- IA (Ollama) y NVD ---
 requests>=2.31.0
 
